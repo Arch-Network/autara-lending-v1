@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use arch_sdk::arch_program::pubkey::Pubkey;
 use autara_client::client::{read::AutaraReadClient, single_thread_client::AutaraReadClientImpl};
@@ -9,7 +10,7 @@ use crate::router::SwapRouter;
 
 pub async fn scan_liquidatable_positions(
     client: &AutaraReadClientImpl,
-    router: &SwapRouter,
+    router: &Arc<SwapRouter>,
     token_filter: &TokenFilter,
     signer: Pubkey,
 ) {
@@ -79,26 +80,37 @@ pub async fn scan_liquidatable_positions(
             );
 
             // Try to find a swap route: collateral -> supply (to repay debt)
-            let quote_result = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                router.best_quote_exact_in(
-                    collateral_mint,
-                    supply_mint,
-                    health.collateral_atoms,
-                    Some(signer),
-                ),
-            )
-            .await;
+            let router_clone = router.clone();
+            let collateral_atoms = health.collateral_atoms;
+            let handle = tokio::task::spawn_blocking(move || {
+                tokio::runtime::Handle::current().block_on(
+                    router_clone.best_quote_exact_in(
+                        collateral_mint,
+                        supply_mint,
+                        collateral_atoms,
+                        Some(signer),
+                    ),
+                )
+            });
+            let abort_handle = handle.abort_handle();
+            let quote_result =
+                match tokio::time::timeout(std::time::Duration::from_secs(10), handle).await {
+                    Ok(result) => Some(result),
+                    Err(_) => {
+                        abort_handle.abort();
+                        None
+                    }
+                };
 
             match quote_result {
-                Err(_) => {
+                None => {
                     tracing::warn!(
                         "  Swap quote timed out for {:?} -> {:?}",
                         collateral_mint,
                         supply_mint
                     );
                 }
-                Ok(Ok(Some((pool, quote)))) => {
+                Some(Ok(Ok(Some((pool, quote))))) => {
                     let (est_out, min_out) = match &quote {
                         SwapQuote::ExactIn(q) => (q.token_est_out, q.token_min_out),
                         SwapQuote::ExactOut(_) => unreachable!(),
@@ -111,15 +123,18 @@ pub async fn scan_liquidatable_positions(
                         min_out,
                     );
                 }
-                Ok(Ok(None)) => {
+                Some(Ok(Ok(None))) => {
                     tracing::warn!(
                         "  No swap route found for {:?} -> {:?}",
                         collateral_mint,
                         supply_mint,
                     );
                 }
-                Ok(Err(e)) => {
+                Some(Ok(Err(e))) => {
                     tracing::warn!("  Failed to get swap quote: {:#}", e);
+                }
+                Some(Err(e)) => {
+                    tracing::warn!("  Swap quote task panicked: {:#}", e);
                 }
             }
         }
@@ -128,7 +143,7 @@ pub async fn scan_liquidatable_positions(
     if liquidatable_count > 0 {
         tracing::info!("Found {} liquidatable position(s)", liquidatable_count);
     } else {
-        tracing::debug!("No liquidatable positions found");
+        tracing::info!("No liquidatable positions found");
     }
 
     if let Some((pos, market, atoms)) = biggest_borrow {

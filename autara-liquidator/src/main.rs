@@ -18,10 +18,8 @@ use crate::scanner::scan_liquidatable_positions;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let filter = tracing_subscriber::EnvFilter::builder()
-        .with_default_directive(tracing::Level::INFO.into())
-        .from_env_lossy();
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    console_subscriber::init();
+    eprintln!("console-subscriber initialized, listening on 127.0.0.1:6669");
 
     let args = Args::parse();
 
@@ -79,7 +77,13 @@ async fn main() -> Result<()> {
     loop {
         match read_client.reload().await {
             Ok(()) => {
-                scan_liquidatable_positions(&read_client, &router, &token_filter, liquidator_pubkey).await;
+                scan_liquidatable_positions(
+                    &read_client,
+                    &router,
+                    &token_filter,
+                    liquidator_pubkey,
+                )
+                .await;
             }
             Err(e) => {
                 tracing::error!("Failed to reload state: {:#}", e);
