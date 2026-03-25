@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
-use arch_sdk::arch_program::pubkey::Pubkey;
+use arch_sdk::arch_program::{bitcoin::key::Keypair, pubkey::Pubkey};
 use clap::Parser;
 use serde::Deserialize;
 
@@ -20,6 +20,8 @@ pub struct LiquidatorConfig {
     pub rpc_url: String,
     /// Autara lending program ID (hex)
     pub autara_program_id: String,
+    /// Path to the liquidator keypair file
+    pub liquidator_keypair: String,
     /// Whirlpools config address (hex). If omitted, uses the default.
     pub whirlpools_config: Option<String>,
     /// Polling interval in seconds
@@ -30,6 +32,13 @@ pub struct LiquidatorConfig {
     /// If omitted or empty, all markets are scanned.
     #[serde(default)]
     pub restrict_tokens: Vec<String>,
+}
+
+impl LiquidatorConfig {
+    pub fn load_keypair(&self) -> Result<(Keypair, Pubkey)> {
+        arch_sdk::with_secret_key_file(&self.liquidator_keypair)
+            .context("failed to load liquidator keypair")
+    }
 }
 
 fn default_poll_interval() -> u64 {
@@ -61,11 +70,6 @@ impl TokenFilter {
     /// Returns true if filtering is active (at least one token specified).
     pub fn is_active(&self) -> bool {
         !self.tokens.is_empty()
-    }
-
-    /// Returns true if the given token is allowed (or if no filter is active).
-    pub fn allows_token(&self, token: &Pubkey) -> bool {
-        self.tokens.is_empty() || self.tokens.contains(token)
     }
 
     /// Returns true if a market with the given supply/collateral mints is allowed.

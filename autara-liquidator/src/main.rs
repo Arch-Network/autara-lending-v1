@@ -30,6 +30,8 @@ async fn main() -> Result<()> {
         serde_json::from_str(&config_str).context("failed to parse config file")?;
 
     let autara_program_id = parse_hex_pubkey(&config.autara_program_id)?;
+    let (_liquidator_keypair, liquidator_pubkey) = config.load_keypair()?;
+    tracing::info!(?liquidator_pubkey, "Loaded liquidator keypair");
 
     let token_filter = TokenFilter::from_config(&config.restrict_tokens)?;
     if token_filter.is_active() {
@@ -77,7 +79,7 @@ async fn main() -> Result<()> {
     loop {
         match read_client.reload().await {
             Ok(()) => {
-                scan_liquidatable_positions(&read_client, &router, &token_filter).await;
+                scan_liquidatable_positions(&read_client, &router, &token_filter, liquidator_pubkey).await;
             }
             Err(e) => {
                 tracing::error!("Failed to reload state: {:#}", e);
@@ -90,7 +92,7 @@ async fn main() -> Result<()> {
                 let router = router.clone();
                 async move {
                     for [token_a, token_b] in tokens.iter().array_combinations::<2>() {
-                        let err = router.register_pair(*token_a, *token_b).await;
+                        let _ = router.register_pair(*token_a, *token_b).await;
                     }
                 }
             });

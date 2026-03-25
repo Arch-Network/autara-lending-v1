@@ -8,7 +8,7 @@ use anyhow::Result;
 use arch_sdk::{ArchRpcClient, arch_program::pubkey::Pubkey};
 use orca_whirlpools::{
     InitializedPool, PoolInfo, SwapQuote, SwapType, fetch_whirlpools_by_token_pair,
-    swap_instructions,
+    swap_instructions_with_options,
 };
 
 /// 1% slippage tolerance
@@ -50,7 +50,9 @@ impl SwapRouter {
             return Ok(());
         }
         let initialized = fetch_initialized_pools(&self.rpc, token_a, token_b).await?;
+        tracing::debug!("register_pair: acquiring write lock (pool_cache)");
         self.pool_cache.write().unwrap().insert(key, initialized);
+        tracing::debug!("register_pair: write lock released");
         Ok(())
     }
 
@@ -70,7 +72,9 @@ impl SwapRouter {
             { self.pool_cache.read().unwrap().keys().copied().collect() };
 
         if pairs.is_empty() {
+            tracing::debug!("maybe_refresh_pools: acquiring write lock (last_discovery, empty)");
             *self.last_discovery.write().unwrap() = Some(Instant::now());
+            tracing::debug!("maybe_refresh_pools: write lock released (last_discovery, empty)");
             return;
         }
 
@@ -80,7 +84,9 @@ impl SwapRouter {
             match fetch_initialized_pools(&self.rpc, token_a, token_b).await {
                 Ok(pools) => {
                     let key = sort_pair(token_a, token_b);
+                    tracing::debug!("maybe_refresh_pools: acquiring write lock (pool_cache)");
                     self.pool_cache.write().unwrap().insert(key, pools);
+                    tracing::debug!("maybe_refresh_pools: write lock released (pool_cache)");
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -93,7 +99,9 @@ impl SwapRouter {
             }
         }
 
+        tracing::debug!("maybe_refresh_pools: acquiring write lock (last_discovery)");
         *self.last_discovery.write().unwrap() = Some(Instant::now());
+        tracing::debug!("maybe_refresh_pools: write lock released (last_discovery)");
     }
 
     /// Get the best ExactIn swap quote across all cached pools for a pair.
@@ -107,12 +115,17 @@ impl SwapRouter {
     ) -> Result<Option<(Pubkey, SwapQuote)>> {
         let key = sort_pair(input_mint, output_mint);
 
-        // Discover on the fly if not cached
+        tracing::debug!("best_quote_exact_in: acquiring read lock (has_pools check)");
         let has_pools = self.pool_cache.read().unwrap().contains_key(&key);
+        tracing::debug!("best_quote_exact_in: has_pools={}", has_pools);
+
         if !has_pools {
+            tracing::debug!("best_quote_exact_in: registering pair {:?} <-> {:?}", input_mint, output_mint);
             self.register_pair(input_mint, output_mint).await?;
+            tracing::debug!("best_quote_exact_in: pair registered");
         }
 
+        tracing::debug!("best_quote_exact_in: acquiring read lock (pool_addresses)");
         let pool_addresses: Vec<Pubkey> = self
             .pool_cache
             .read()
@@ -120,6 +133,7 @@ impl SwapRouter {
             .get(&key)
             .map(|pools| pools.iter().map(|p| p.address).collect())
             .unwrap_or_default();
+        tracing::debug!("best_quote_exact_in: found {} pool(s)", pool_addresses.len());
 
         if pool_addresses.is_empty() {
             return Ok(None);
@@ -127,17 +141,21 @@ impl SwapRouter {
 
         let mut best: Option<(Pubkey, SwapQuote, u64)> = None;
 
-        for pool_addr in pool_addresses {
-            let result = swap_instructions(
+        for (i, pool_addr) in pool_addresses.iter().enumerate() {
+            tracing::debug!("best_quote_exact_in: quoting pool {}/{} {:?}", i + 1, pool_addresses.len(), pool_addr);
+            let quote_start = std::time::Instant::now();
+            let result = swap_instructions_with_options(
                 &self.rpc,
-                pool_addr,
+                *pool_addr,
                 amount_in,
                 input_mint,
                 SwapType::ExactIn,
                 Some(SLIPPAGE_TOLERANCE_BPS),
                 signer,
+                true,
             )
             .await;
+            tracing::debug!("best_quote_exact_in: pool {:?} quote took {:?}", pool_addr, quote_start.elapsed());
 
             match result {
                 Ok(swap_ix) => {
@@ -148,11 +166,11 @@ impl SwapRouter {
 
                     let is_better = best.as_ref().map_or(true, |(_, _, prev)| est_out > *prev);
                     if is_better {
-                        best = Some((pool_addr, swap_ix.quote, est_out));
+                        best = Some((*pool_addr, swap_ix.quote, est_out));
                     }
                 }
                 Err(e) => {
-                    tracing::debug!(
+                    tracing::warn!(
                         ?pool_addr,
                         "Swap quote failed (pool may have no liquidity): {}",
                         e

@@ -1,6 +1,11 @@
 {
   "rpc_url": "https://rpc.testnet.arch.network",
   "autara_program_id": "53def2dc8516302842b10e356914d2a5f6b33425ba42aec684f706aa1cf64192",
+  "liquidator_keypair": "keys/autara-admin-stage.key",
   "whirlpools_config": "082ca6fdbe135aa0ec1b3e0561091924d1a0ac9a34e4a3664d8e7a374abc21ce",
-  "poll_interval_secs": 5
+  "poll_interval_secs": 5,
+  "restrict_tokens": [
+    "ce6c3433c5d6ce3fdae9c6d14db01c6ad5abed8f9c913cdf71a43d019ec3ddd5",
+    "cf57694f9bd8cc3273cddf1371eb0f27130ae7f14ecaf5c948588c7555fec89c"
+  ]
 }
