@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::Context;
-use arch_sdk::{arch_program::pubkey::Pubkey, AccountInfoWithPubkey, AsyncArchRpcClient};
+use arch_sdk::{arch_program::pubkey::Pubkey, AccountInfoWithPubkey, ArchRpcClient};
 use autara_lib::{
     pda::{find_borrow_position_pda, find_global_config_pda, find_supply_position_pda},
     state::{
@@ -21,7 +21,7 @@ use crate::{
 };
 
 pub struct AutaraSharedState {
-    arch_client: AsyncArchRpcClient,
+    arch_client: ArchRpcClient,
     autara_program_id: Pubkey,
     market_map: DashMap<Pubkey, Market>,
     supply_position_map: DashMap<Pubkey, SupplyPosition>,
@@ -32,7 +32,7 @@ pub struct AutaraSharedState {
 }
 
 impl AutaraSharedState {
-    pub fn new(arch_client: AsyncArchRpcClient, autara_program_id: Pubkey) -> Self {
+    pub fn new(arch_client: ArchRpcClient, autara_program_id: Pubkey) -> Self {
         Self {
             arch_client,
             autara_program_id,

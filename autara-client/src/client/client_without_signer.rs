@@ -1,4 +1,4 @@
-use arch_sdk::{arch_program::pubkey::Pubkey, AsyncArchRpcClient};
+use arch_sdk::{arch_program::pubkey::Pubkey, ArchRpcClient};
 
 use crate::client::{
     blockhash_cache::BlockhashCache, read::AutaraReadClient, tx_broadcast::AutaraTxBroadcast,
@@ -7,14 +7,14 @@ use crate::client::{
 
 pub struct AutaraFullClientWithoutSigner<T: AutaraReadClient> {
     read_client: T,
-    arch_client: AsyncArchRpcClient,
+    arch_client: ArchRpcClient,
     blockhash_cache: BlockhashCache,
 }
 
 impl<T: AutaraReadClient> AutaraFullClientWithoutSigner<T> {
     pub fn new(
         read_client: T,
-        arch_client: AsyncArchRpcClient,
+        arch_client: ArchRpcClient,
         blockhash_cache: BlockhashCache,
     ) -> Self {
         Self {
@@ -24,7 +24,7 @@ impl<T: AutaraReadClient> AutaraFullClientWithoutSigner<T> {
         }
     }
 
-    pub fn async_arch_client(&self) -> &AsyncArchRpcClient {
+    pub fn async_arch_client(&self) -> &ArchRpcClient {
         &self.arch_client
     }
 

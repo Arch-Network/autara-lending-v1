@@ -6,13 +6,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use arch_sdk::AsyncArchRpcClient;
+use arch_sdk::ArchRpcClient;
 use autara_client::client::single_thread_client::AutaraReadClientImpl;
 use clap::Parser;
 use itertools::Itertools;
 use orca_whirlpools::{WhirlpoolsConfigInput, set_whirlpools_config_address};
 
-use crate::config::{Args, LiquidatorConfig, parse_hex_pubkey};
+use crate::config::{Args, LiquidatorConfig, TokenFilter, parse_hex_pubkey};
 use crate::router::{DISCOVERY_INTERVAL, SwapRouter};
 use crate::scanner::scan_liquidatable_positions;
 
@@ -31,6 +31,14 @@ async fn main() -> Result<()> {
 
     let autara_program_id = parse_hex_pubkey(&config.autara_program_id)?;
 
+    let token_filter = TokenFilter::from_config(&config.restrict_tokens)?;
+    if token_filter.is_active() {
+        tracing::info!(
+            "Token filter active: restricting to {} token(s)",
+            config.restrict_tokens.len()
+        );
+    }
+
     if let Some(ref wp_config) = config.whirlpools_config {
         let wp_pubkey = parse_hex_pubkey(wp_config)?;
         set_whirlpools_config_address(WhirlpoolsConfigInput::Address(wp_pubkey))
@@ -47,7 +55,7 @@ async fn main() -> Result<()> {
         network: arch_sdk::arch_program::bitcoin::Network::Regtest,
         titan_url: String::new(),
     };
-    let arch_client = AsyncArchRpcClient::new(&sdk_config);
+    let arch_client = ArchRpcClient::new(&sdk_config);
 
     let mut read_client = AutaraReadClientImpl::new(arch_client.clone(), autara_program_id);
     let router = Arc::new(SwapRouter::new(arch_client));
@@ -69,7 +77,7 @@ async fn main() -> Result<()> {
     loop {
         match read_client.reload().await {
             Ok(()) => {
-                scan_liquidatable_positions(&read_client, &router).await;
+                scan_liquidatable_positions(&read_client, &router, &token_filter).await;
             }
             Err(e) => {
                 tracing::error!("Failed to reload state: {:#}", e);
@@ -77,7 +85,7 @@ async fn main() -> Result<()> {
         }
         if last_token_refresh.elapsed() > TOKEN_REFRESH_INTERVAL {
             last_token_refresh = Instant::now();
-            let tokens = read_client.all_tokens();
+            let tokens = token_filter.filter_tokens(read_client.all_tokens());
             tokio::spawn({
                 let router = router.clone();
                 async move {

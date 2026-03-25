@@ -1,13 +1,12 @@
 use arch_sdk::{
-    arch_program::pubkey::Pubkey, AsyncArchRpcClient, ProcessedTransaction, RuntimeTransaction,
-    Status,
+    arch_program::pubkey::Pubkey, ArchRpcClient, ProcessedTransaction, RuntimeTransaction, Status,
 };
 use autara_lib::event::AutaraEvents;
 use regex::Regex;
 
 pub struct AutaraTxBroadcast<'a> {
     pub program_id: &'a Pubkey,
-    pub arch_client: &'a AsyncArchRpcClient,
+    pub arch_client: &'a ArchRpcClient,
 }
 
 impl<'a> AutaraTxBroadcast<'a> {

@@ -1,5 +1,6 @@
 {
   "rpc_url": "https://rpc.testnet.arch.network",
   "autara_program_id": "53def2dc8516302842b10e356914d2a5f6b33425ba42aec684f706aa1cf64192",
+  "whirlpools_config": "082ca6fdbe135aa0ec1b3e0561091924d1a0ac9a34e4a3664d8e7a374abc21ce",
   "poll_interval_secs": 5
 }

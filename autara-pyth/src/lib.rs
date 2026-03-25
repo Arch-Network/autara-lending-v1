@@ -16,7 +16,7 @@ use arch_sdk::{
     arch_program::{
         account::AccountMeta, instruction::Instruction, pubkey::Pubkey, sanitized::ArchMessage,
     },
-    build_and_sign_transaction, AsyncArchRpcClient, Status,
+    build_and_sign_transaction, ArchRpcClient, Status,
 };
 use autara_lib::oracle::pyth::PythPrice;
 use serde::{Deserialize, Serialize};
@@ -41,7 +41,7 @@ pub fn push_interval_from_env() -> Duration {
 }
 
 pub async fn fetch_and_push_feeds(
-    client: &AsyncArchRpcClient,
+    client: &ArchRpcClient,
     autara_oracle_program_id: &Pubkey,
     signer: &Keypair,
     feeds: &[impl AsRef<str>],
@@ -226,7 +226,7 @@ async fn refresh_signer_balance(
 }
 
 pub struct AutaraPythPusherClient {
-    pub client: AsyncArchRpcClient,
+    pub client: ArchRpcClient,
     pub autara_oracle_program_id: Pubkey,
     pub network: Network,
 }
@@ -257,7 +257,7 @@ impl AutaraPythPusherClient {
 }
 
 pub async fn build_and_send_tx(
-    client: &AsyncArchRpcClient,
+    client: &ArchRpcClient,
     signer_pk: &Pubkey,
     signer: &Keypair,
     ixs: &[Instruction],

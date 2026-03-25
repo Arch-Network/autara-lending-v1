@@ -1,9 +1,14 @@
 use autara_client::client::{read::AutaraReadClient, single_thread_client::AutaraReadClientImpl};
 use orca_whirlpools::SwapQuote;
 
+use crate::config::TokenFilter;
 use crate::router::SwapRouter;
 
-pub async fn scan_liquidatable_positions(client: &AutaraReadClientImpl, router: &SwapRouter) {
+pub async fn scan_liquidatable_positions(
+    client: &AutaraReadClientImpl,
+    router: &SwapRouter,
+    token_filter: &TokenFilter,
+) {
     let mut liquidatable_count = 0u64;
 
     for (position_key, borrow_position) in client.all_borrow_position() {
@@ -14,6 +19,13 @@ pub async fn scan_liquidatable_positions(client: &AutaraReadClientImpl, router: 
                 continue;
             }
         };
+
+        let supply_mint = market_wrapper.market().supply_token_info().mint;
+        let collateral_mint = market_wrapper.market().collateral_token_info().mint;
+
+        if !token_filter.allows_market(&supply_mint, &collateral_mint) {
+            continue;
+        }
 
         let health = match market_wrapper.borrow_position_health(&borrow_position) {
             Ok(h) => h,
@@ -26,9 +38,6 @@ pub async fn scan_liquidatable_positions(client: &AutaraReadClientImpl, router: 
 
         if health.ltv >= unhealthy_ltv {
             liquidatable_count += 1;
-
-            let supply_mint = market_wrapper.market().supply_token_info().mint;
-            let collateral_mint = market_wrapper.market().collateral_token_info().mint;
 
             tracing::info!(
                 "LIQUIDATABLE position={:?} authority={:?} market={:?} ltv={} unhealthy_ltv={} borrowed_atoms={} collateral_atoms={}",

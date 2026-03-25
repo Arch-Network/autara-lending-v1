@@ -6,8 +6,8 @@ use arch_sdk::{
         rent::minimum_rent,
         sanitized::ArchMessage,
     },
-    build_and_sign_transaction, generate_new_keypair, with_secret_key_file, ArchRpcClient,
-    AsyncArchRpcClient, Config, ProgramDeployer, ProgramDeployerError, Status,
+    build_and_sign_transaction, generate_new_keypair, with_secret_key_file, ArchRpcClient, Config,
+    ProgramDeployer, Status,
 };
 use autara_lib::{
     oracle::{oracle_config::OracleConfig, pyth::PythPrice},
@@ -20,7 +20,12 @@ use crate::config::path_from_workspace;
 pub const NODE1_ADDRESS: &str = "http://localhost:9002/";
 pub const BITCOIN_NETWORK: bitcoin::Network = bitcoin::Network::Testnet;
 
-pub fn deploy_program(config: &Config, deployer: Option<&str>, key: &str, path: &str) -> Pubkey {
+pub async fn deploy_program(
+    config: &Config,
+    deployer: Option<&str>,
+    key: &str,
+    path: &str,
+) -> Pubkey {
     let (program_keypair, pubkey) = with_secret_key_file(&path_from_workspace(key)).unwrap();
     let (authority_keypair, _) = deployer.map_or_else(
         || {
@@ -33,45 +38,44 @@ pub fn deploy_program(config: &Config, deployer: Option<&str>, key: &str, path: 
     for _ in 0..2 {
         client
             .create_and_fund_account_with_faucet(&authority_keypair)
+            .await
             .expect("create and fund account with faucet should not fail");
     }
-    if let Err(err) = ProgramDeployer::new(config).try_deploy_program(
-        path.to_string(),
-        program_keypair,
-        authority_keypair,
-        &path_from_workspace(path),
-    ) {
-        if let ProgramDeployerError::TransactionError(msg) = &err {
-            if msg.contains("already exists") {
-                return pubkey;
-            }
-        }
-        panic!("Failed to deploy program: {:?}", err);
-    };
+    ProgramDeployer::new(config)
+        .try_deploy_program(
+            path.to_string(),
+            program_keypair,
+            authority_keypair,
+            &path_from_workspace(path),
+        )
+        .await
+        .unwrap_or_else(|err| panic!("Failed to deploy program: {:?}", err));
     pubkey
 }
 
-pub fn deploy_new_autara(config: &Config) -> Pubkey {
+pub async fn deploy_new_autara(config: &Config) -> Pubkey {
     deploy_program(
         config,
         Some("keys/autara-deployer.key"),
         "keys/autara-stage.key",
         "target/deploy/autara_program.so",
     )
+    .await
 }
 
-pub fn deploy_new_autara_pyth(config: &Config) -> Pubkey {
+pub async fn deploy_new_autara_pyth(config: &Config) -> Pubkey {
     deploy_program(
         config,
         Some("keys/autara-deployer.key"),
         "keys/autara-pyth-stage.key",
         "target/deploy/autara_oracle.so",
     )
+    .await
 }
 
 #[derive(Clone)]
 pub struct AutaraTestEnv {
-    pub arch_client: AsyncArchRpcClient,
+    pub arch_client: ArchRpcClient,
     pub autara_program_pubkey: Pubkey,
     pub autara_oracle_program_pubkey: Pubkey,
     pub authority_keypair: Keypair,
@@ -89,7 +93,7 @@ pub struct AutaraTestEnv {
 
 impl AutaraTestEnv {
     pub async fn new(
-        arch_client: AsyncArchRpcClient,
+        arch_client: ArchRpcClient,
         autara_program_pubkey: Pubkey,
         autara_oracle_program_pubkey: Pubkey,
     ) -> anyhow::Result<Self> {
@@ -194,7 +198,7 @@ impl AutaraTestEnv {
 
 #[derive(Clone)]
 pub struct TokenMinter {
-    client: AsyncArchRpcClient,
+    client: ArchRpcClient,
     authority_keypair: Keypair,
     authority_pubkey: Pubkey,
     mint_pubkey: Pubkey,
@@ -202,7 +206,7 @@ pub struct TokenMinter {
 
 impl TokenMinter {
     pub async fn new(
-        client: AsyncArchRpcClient,
+        client: ArchRpcClient,
         authority_keypair: Keypair,
         users: &[(Pubkey, u64)],
     ) -> anyhow::Result<Self> {
@@ -218,7 +222,7 @@ impl TokenMinter {
     }
 
     pub fn from_existing(
-        client: AsyncArchRpcClient,
+        client: ArchRpcClient,
         authority_keypair: Keypair,
         mint_pubkey: Pubkey,
     ) -> Self {
@@ -312,7 +316,7 @@ impl TokenMinter {
 }
 
 pub async fn create_mint_and_mint_custom_amounts(
-    client: &AsyncArchRpcClient,
+    client: &ArchRpcClient,
     authority_and_payer_keypair: Keypair,
     users_and_amounts: &[(Pubkey, u64)],
 ) -> anyhow::Result<Pubkey> {

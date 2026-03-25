@@ -6,7 +6,7 @@ use arch_sdk::{
         pubkey::Pubkey,
         sanitized::ArchMessage,
     },
-    sign_message_bip322, AsyncArchRpcClient, RuntimeTransaction, Signature,
+    sign_message_bip322, ArchRpcClient, RuntimeTransaction, Signature,
 };
 use autara_lib::{
     ixs::{
@@ -23,7 +23,7 @@ use autara_lib::{
 use crate::client::{blockhash_cache::BlockhashCache, read::AutaraReadClient};
 
 pub struct AutaraTransactionBuilder<'a, T: AutaraReadClient> {
-    pub arch_client: &'a AsyncArchRpcClient,
+    pub arch_client: &'a ArchRpcClient,
     pub autara_read_client: &'a T,
     pub autara_program_id: Pubkey,
     pub authority_key: Pubkey,
@@ -722,7 +722,8 @@ impl TransactionToSign {
                     })?,
                     &self.message_hash,
                     network,
-                );
+                )
+                .ok()?;
                 Some(Signature(sign))
             })
             .collect::<Option<Vec<Signature>>>()

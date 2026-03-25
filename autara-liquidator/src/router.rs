@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
-use arch_sdk::{AsyncArchRpcClient, arch_program::pubkey::Pubkey};
+use arch_sdk::{ArchRpcClient, arch_program::pubkey::Pubkey};
 use orca_whirlpools::{
     InitializedPool, PoolInfo, SwapQuote, SwapType, fetch_whirlpools_by_token_pair,
     swap_instructions,
@@ -29,13 +29,13 @@ type PoolCache = HashMap<(Pubkey, Pubkey), Vec<InitializedPool>>;
 /// Pool discovery runs periodically via `maybe_refresh_pools()`. The cache is
 /// behind an `RwLock` so quoting only needs `&self`.
 pub struct SwapRouter {
-    rpc: AsyncArchRpcClient,
+    rpc: ArchRpcClient,
     pool_cache: RwLock<PoolCache>,
     last_discovery: RwLock<Option<Instant>>,
 }
 
 impl SwapRouter {
-    pub fn new(rpc: AsyncArchRpcClient) -> Self {
+    pub fn new(rpc: ArchRpcClient) -> Self {
         Self {
             rpc,
             pool_cache: RwLock::new(HashMap::new()),
@@ -166,7 +166,7 @@ impl SwapRouter {
 }
 
 async fn fetch_initialized_pools(
-    rpc: &AsyncArchRpcClient,
+    rpc: &ArchRpcClient,
     token_a: Pubkey,
     token_b: Pubkey,
 ) -> Result<Vec<InitializedPool>> {

@@ -1,6 +1,6 @@
 use arch_sdk::{
     arch_program::{bitcoin::key::Keypair, pubkey::Pubkey},
-    AsyncArchRpcClient,
+    ArchRpcClient,
 };
 use autara_client::{
     client::{
@@ -52,7 +52,7 @@ impl AutaraFixture {
         return this;
     }
 
-    fn from_env(arch_client: AsyncArchRpcClient, test_env: AutaraTestEnv, admin: Keypair) -> Self {
+    fn from_env(arch_client: ArchRpcClient, test_env: AutaraTestEnv, admin: Keypair) -> Self {
         let user_client = AutaraFullClientWithSigner::new_simple(
             arch_client,
             arch_sdk::arch_program::bitcoin::Network::Regtest,

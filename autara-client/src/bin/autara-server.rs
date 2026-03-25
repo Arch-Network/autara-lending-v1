@@ -154,7 +154,7 @@ fn default_market_config(
     }
 }
 
-async fn account_exists(client: &arch_sdk::AsyncArchRpcClient, pubkey: &Pubkey) -> bool {
+async fn account_exists(client: &arch_sdk::ArchRpcClient, pubkey: &Pubkey) -> bool {
     client.read_account_info(*pubkey).await.is_ok()
 }
 

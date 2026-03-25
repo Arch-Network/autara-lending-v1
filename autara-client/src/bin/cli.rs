@@ -1039,7 +1039,7 @@ impl TokenNames {
     }
 }
 
-async fn account_exists(rpc: &arch_sdk::AsyncArchRpcClient, pubkey: &Pubkey) -> bool {
+async fn account_exists(rpc: &arch_sdk::ArchRpcClient, pubkey: &Pubkey) -> bool {
     match rpc.read_account_info(*pubkey).await {
         Ok(_) => true,
         Err(_) => false,
@@ -1047,7 +1047,7 @@ async fn account_exists(rpc: &arch_sdk::AsyncArchRpcClient, pubkey: &Pubkey) -> 
 }
 
 async fn create_mint_on_chain(
-    rpc: &arch_sdk::AsyncArchRpcClient,
+    rpc: &arch_sdk::ArchRpcClient,
     payer: &Pubkey,
     payer_keypair: Keypair,
     mint_authority: &Pubkey,

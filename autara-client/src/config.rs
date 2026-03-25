@@ -56,7 +56,7 @@ impl ArchConfig {
         }
     }
 
-    pub fn arch_rpc_client(&self) -> arch_sdk::AsyncArchRpcClient {
+    pub fn arch_rpc_client(&self) -> arch_sdk::ArchRpcClient {
         let config = arch_sdk::Config {
             arch_node_url: self.arch_node_url.clone(),
             node_endpoint: self.bitcoin_node_endpoint.clone(),
@@ -65,7 +65,7 @@ impl ArchConfig {
             network: arch_sdk::arch_program::bitcoin::Network::Regtest,
             titan_url: String::new(),
         };
-        arch_sdk::AsyncArchRpcClient::new(&config)
+        arch_sdk::ArchRpcClient::new(&config)
     }
 
     pub async fn bitcoin_rpc_client(
