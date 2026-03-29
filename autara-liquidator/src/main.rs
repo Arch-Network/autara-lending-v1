@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use arch_sdk::ArchRpcClient;
+use autara_client::client::blockhash_cache::BlockhashCache;
 use autara_client::client::single_thread_client::AutaraReadClientImpl;
 use clap::Parser;
 use itertools::Itertools;
@@ -18,8 +19,7 @@ use crate::scanner::scan_liquidatable_positions;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    console_subscriber::init();
-    eprintln!("console-subscriber initialized, listening on 127.0.0.1:6669");
+    tracing_subscriber::fmt::init();
 
     let args = Args::parse();
 
@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
         serde_json::from_str(&config_str).context("failed to parse config file")?;
 
     let autara_program_id = parse_hex_pubkey(&config.autara_program_id)?;
-    let (_liquidator_keypair, liquidator_pubkey) = config.load_keypair()?;
+    let (liquidator_keypair, liquidator_pubkey) = config.load_keypair()?;
     tracing::info!(?liquidator_pubkey, "Loaded liquidator keypair");
 
     let token_filter = TokenFilter::from_config(&config.restrict_tokens)?;
@@ -58,7 +58,8 @@ async fn main() -> Result<()> {
     let arch_client = ArchRpcClient::new(&sdk_config);
 
     let mut read_client = AutaraReadClientImpl::new(arch_client.clone(), autara_program_id);
-    let router = Arc::new(SwapRouter::new(arch_client));
+    let router = Arc::new(SwapRouter::new(arch_client.clone()));
+    let blockhash_cache = BlockhashCache::new(arch_client.clone(), None).await?;
 
     let poll_interval = Duration::from_secs(config.poll_interval_secs);
 
@@ -81,7 +82,11 @@ async fn main() -> Result<()> {
                     &read_client,
                     &router,
                     &token_filter,
+                    &arch_client,
+                    autara_program_id,
+                    &liquidator_keypair,
                     liquidator_pubkey,
+                    &blockhash_cache,
                 )
                 .await;
             }

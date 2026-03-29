@@ -18,4 +18,4 @@ hex = { workspace = true }
 itertools = { workspace = true }
 
 orca_whirlpools = { path = "../../CLAMM/rust-sdk/whirlpool" }
-console-subscriber = "0.4"
+console-subscriber = "0.5"
