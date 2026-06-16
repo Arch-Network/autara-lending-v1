@@ -7,6 +7,7 @@ pub mod create_market;
 pub mod create_supply_position;
 pub mod deposit_apl_collateral;
 pub mod donate_supply;
+pub mod idl;
 pub mod liquidate;
 pub mod redeem_curator_fees;
 pub mod redeem_protocol_fees;

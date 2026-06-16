@@ -4,7 +4,7 @@
     "name": "Autara Lending",
     "version": "0.1.0",
     "spec": "0.1.0",
-    "description": "Autara lending protocol. Native Arch program; instructions are Borsh-encoded as [1-byte AurataInstructionTag][payload]. Discriminators below are the tag enum's declaration-order indices (autara-lib/src/ixs/types.rs)."
+    "description": "Autara lending protocol. Native Arch program; instructions are Borsh-encoded as [1-byte AurataInstructionTag][payload]. Discriminators below are the tag enum's declaration-order indices (autara-lib/src/ixs/types.rs). All 20 instructions are covered. For create_market/update_config, the nested Pod config types (LtvConfig=48B, IFixedPoint=16B, OracleConfig=257B over Borsh; 264B in memory) are represented as opaque fixed-size u8 arrays so byte offsets stay exact while keeping the IDL small; the InterestRateCurveKind enum carries opaque variant payloads (Fixed=16B, Polyline=64B, Adaptive=16B)."
   },
   "instructions": [
     {
@@ -277,6 +277,85 @@
       "args": [
         { "name": "amount", "type": "u64" }
       ]
+    },
+    {
+      "name": "create_market",
+      "discriminator": [0],
+      "accounts": [
+        { "name": "curator", "signer": true },
+        { "name": "payer", "signer": true, "writable": true },
+        { "name": "global_config" },
+        { "name": "market", "writable": true },
+        { "name": "supply_mint" },
+        { "name": "market_supply_vault", "writable": true },
+        { "name": "collateral_mint" },
+        { "name": "market_collateral_vault", "writable": true },
+        { "name": "apl_token_program" },
+        { "name": "associated_token_program" },
+        { "name": "system_program" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "market_bump", "type": "u8" },
+        { "name": "index", "type": "u8" },
+        { "name": "ltv_config", "type": { "array": ["u8", 48] } },
+        { "name": "max_utilisation_rate", "type": { "array": ["u8", 16] } },
+        { "name": "supply_oracle_config", "type": { "array": ["u8", 257] } },
+        { "name": "collateral_oracle_config", "type": { "array": ["u8", 257] } },
+        { "name": "interest_rate", "type": { "defined": { "name": "InterestRateCurveKind" } } },
+        { "name": "lending_market_fee_in_bps", "type": "u16" }
+      ]
+    },
+    {
+      "name": "update_config",
+      "discriminator": [9],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "global_config" },
+        { "name": "curator", "signer": true },
+        { "name": "supply_oracle" },
+        { "name": "collateral_oracle" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "supply_oracle_config", "type": { "option": { "array": ["u8", 257] } } },
+        { "name": "collateral_oracle_config", "type": { "option": { "array": ["u8", 257] } } },
+        { "name": "ltv_config", "type": { "option": { "array": ["u8", 48] } } },
+        { "name": "max_supply_atoms", "type": { "option": "u64" } },
+        { "name": "max_utilisation_rate", "type": { "option": { "array": ["u8", 16] } } },
+        { "name": "lending_market_fee_in_bps", "type": { "option": "u16" } }
+      ]
+    },
+    {
+      "name": "create_global_config",
+      "discriminator": [12],
+      "accounts": [
+        { "name": "payer", "signer": true, "writable": true },
+        { "name": "global_config", "writable": true },
+        { "name": "system_program" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "bump", "type": "u8" },
+        { "name": "admin", "type": "pubkey" },
+        { "name": "fee_receiver", "type": "pubkey" },
+        { "name": "protocol_fee_share_in_bps", "type": "u16" }
+      ]
+    },
+    {
+      "name": "update_global_config",
+      "discriminator": [15],
+      "accounts": [
+        { "name": "admin", "signer": true, "writable": true },
+        { "name": "global_config", "writable": true },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "accept_nomination", "type": "bool" },
+        { "name": "nominated_admin", "type": { "option": "pubkey" } },
+        { "name": "fee_receiver", "type": { "option": "pubkey" } },
+        { "name": "protocol_fee_share_in_bps", "type": { "option": "u16" } }
+      ]
     }
   ],
   "types": [
@@ -299,6 +378,17 @@
           { "name": "pubkey", "type": "pubkey" },
           { "name": "is_signer", "type": "bool" },
           { "name": "is_writable", "type": "bool" }
+        ]
+      }
+    },
+    {
+      "name": "InterestRateCurveKind",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Fixed", "fields": [ { "array": ["u8", 16] } ] },
+          { "name": "Polyline", "fields": [ { "array": ["u8", 64] } ] },
+          { "name": "Adaptive", "fields": [ { "array": ["u8", 16] } ] }
         ]
       }
     }
