@@ -1,0 +1,306 @@
+{
+  "address": "53def2dc8516302842b10e356914d2a5f6b33425ba42aec684f706aa1cf64192",
+  "metadata": {
+    "name": "Autara Lending",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Autara lending protocol. Native Arch program; instructions are Borsh-encoded as [1-byte AurataInstructionTag][payload]. Discriminators below are the tag enum's declaration-order indices (autara-lib/src/ixs/types.rs)."
+  },
+  "instructions": [
+    {
+      "name": "create_supply_position",
+      "discriminator": [1],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "supply_position", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "payer", "signer": true, "writable": true },
+        { "name": "system_program" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "bump", "type": "u8" }
+      ]
+    },
+    {
+      "name": "supply_apl",
+      "discriminator": [2],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "supply_position", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "authority_supply_ata", "writable": true },
+        { "name": "market_supply_vault", "writable": true },
+        { "name": "apl_token_program" },
+        { "name": "supply_oracle" },
+        { "name": "collateral_oracle" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "amount", "type": "u64" }
+      ]
+    },
+    {
+      "name": "withdraw_supply",
+      "discriminator": [3],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "supply_position", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "authority_supply_ata", "writable": true },
+        { "name": "market_supply_vault", "writable": true },
+        { "name": "apl_token_program" },
+        { "name": "supply_oracle" },
+        { "name": "collateral_oracle" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "amount", "type": "u64" },
+        { "name": "withdraw_all", "type": "bool" }
+      ]
+    },
+    {
+      "name": "create_borrow_position",
+      "discriminator": [4],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "borrow_position", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "payer", "signer": true, "writable": true },
+        { "name": "system_program" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "bump", "type": "u8" }
+      ]
+    },
+    {
+      "name": "deposit_apl_collateral",
+      "discriminator": [5],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "borrow_position", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "authority_collateral_ata", "writable": true },
+        { "name": "market_collateral_vault", "writable": true },
+        { "name": "apl_token_program" },
+        { "name": "supply_oracle" },
+        { "name": "collateral_oracle" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "amount", "type": "u64" }
+      ]
+    },
+    {
+      "name": "withdraw_apl_collateral",
+      "discriminator": [6],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "borrow_position", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "authority_collateral_ata", "writable": true },
+        { "name": "market_collateral_vault", "writable": true },
+        { "name": "apl_token_program" },
+        { "name": "supply_oracle" },
+        { "name": "collateral_oracle" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "amount", "type": "u64" },
+        { "name": "withdraw_all", "type": "bool" }
+      ]
+    },
+    {
+      "name": "borrow_apl",
+      "discriminator": [7],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "borrow_position", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "authority_supply_ata", "writable": true },
+        { "name": "market_supply_vault", "writable": true },
+        { "name": "apl_token_program" },
+        { "name": "supply_oracle" },
+        { "name": "collateral_oracle" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "amount", "type": "u64" }
+      ]
+    },
+    {
+      "name": "repay_apl",
+      "discriminator": [8],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "borrow_position", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "authority_supply_ata", "writable": true },
+        { "name": "market_supply_vault", "writable": true },
+        { "name": "apl_token_program" },
+        { "name": "supply_oracle" },
+        { "name": "collateral_oracle" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "amount", "type": "u64" },
+        { "name": "repay_all", "type": "bool" }
+      ]
+    },
+    {
+      "name": "liquidate",
+      "discriminator": [10],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "borrow_position", "writable": true },
+        { "name": "liquidator", "signer": true },
+        { "name": "liquidator_supply_ata", "writable": true },
+        { "name": "liquidator_collateral_ata", "writable": true },
+        { "name": "market_supply_vault", "writable": true },
+        { "name": "market_collateral_vault", "writable": true },
+        { "name": "apl_token_program" },
+        { "name": "supply_oracle" },
+        { "name": "collateral_oracle" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "max_borrowed_atoms_to_repay", "type": "u64" },
+        { "name": "min_collateral_atoms_to_receive", "type": "u64" },
+        { "name": "ix_callback", "type": { "option": { "defined": { "name": "Instruction" } } } }
+      ]
+    },
+    {
+      "name": "log",
+      "discriminator": [11],
+      "accounts": [],
+      "args": []
+    },
+    {
+      "name": "redeem_curator_fees",
+      "discriminator": [13],
+      "accounts": [
+        { "name": "curator", "signer": true },
+        { "name": "market", "writable": true },
+        { "name": "curator_supply_ata", "writable": true },
+        { "name": "market_supply_vault", "writable": true },
+        { "name": "apl_token_program" }
+      ],
+      "args": []
+    },
+    {
+      "name": "redeem_protocol_fees",
+      "discriminator": [14],
+      "accounts": [
+        { "name": "signer", "signer": true },
+        { "name": "global_config" },
+        { "name": "market", "writable": true },
+        { "name": "receiver_supply_ata", "writable": true },
+        { "name": "market_supply_vault", "writable": true },
+        { "name": "apl_token_program" }
+      ],
+      "args": []
+    },
+    {
+      "name": "borrow_deposit_apl",
+      "discriminator": [16],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "borrow_position", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "authority_supply_ata", "writable": true },
+        { "name": "market_supply_vault", "writable": true },
+        { "name": "authority_collateral_ata", "writable": true },
+        { "name": "market_collateral_vault", "writable": true },
+        { "name": "apl_token_program" },
+        { "name": "supply_oracle" },
+        { "name": "collateral_oracle" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "deposit_amount", "type": "u64" },
+        { "name": "borrow_amount", "type": "u64" },
+        { "name": "ix_callback", "type": { "option": { "defined": { "name": "Instruction" } } } }
+      ]
+    },
+    {
+      "name": "withdraw_repay_apl",
+      "discriminator": [17],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "borrow_position", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "authority_supply_ata", "writable": true },
+        { "name": "market_supply_vault", "writable": true },
+        { "name": "authority_collateral_ata", "writable": true },
+        { "name": "market_collateral_vault", "writable": true },
+        { "name": "apl_token_program" },
+        { "name": "supply_oracle" },
+        { "name": "collateral_oracle" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "repay_amount", "type": "u64" },
+        { "name": "withdraw_amount", "type": "u64" },
+        { "name": "repay_all", "type": "bool" },
+        { "name": "withdraw_all", "type": "bool" },
+        { "name": "ix_callback", "type": { "option": { "defined": { "name": "Instruction" } } } }
+      ]
+    },
+    {
+      "name": "socialize_loss",
+      "discriminator": [18],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "borrow_position", "writable": true },
+        { "name": "curator", "signer": true },
+        { "name": "receiver_collateral_ata", "writable": true },
+        { "name": "market_collateral_vault", "writable": true },
+        { "name": "apl_token_program" },
+        { "name": "supply_oracle" },
+        { "name": "collateral_oracle" },
+        { "name": "autara_program" }
+      ],
+      "args": []
+    },
+    {
+      "name": "donate_supply",
+      "discriminator": [19],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "authority_supply_ata", "writable": true },
+        { "name": "market_supply_vault", "writable": true },
+        { "name": "apl_token_program" },
+        { "name": "autara_program" }
+      ],
+      "args": [
+        { "name": "amount", "type": "u64" }
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "Instruction",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "program_id", "type": "pubkey" },
+          { "name": "accounts", "type": { "vec": { "defined": { "name": "AccountMeta" } } } },
+          { "name": "data", "type": "bytes" }
+        ]
+      }
+    },
+    {
+      "name": "AccountMeta",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "pubkey", "type": "pubkey" },
+          { "name": "is_signer", "type": "bool" },
+          { "name": "is_writable", "type": "bool" }
+        ]
+      }
+    }
+  ]
+}
