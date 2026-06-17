@@ -12,7 +12,7 @@
 
 use std::fs;
 
-use arch_sdk::{with_secret_key_file, AsyncArchRpcClient, Config};
+use arch_sdk::{with_secret_key_file, ArchRpcClient, AsyncArchRpcClient, Config};
 use autara_client::{config::path_from_workspace, idl_deploy::upgrade_in_place};
 
 const PROGRAM_KEY: &str = "keys/autara-stage.key";
@@ -47,6 +47,19 @@ fn main() -> anyhow::Result<()> {
 
     let elf = fs::read(path_from_workspace(ELF_PATH))?;
     println!("Upgrading LIVE program {EXPECTED_PROGRAM_B58} ({} bytes ELF)", elf.len());
+
+    // Optional: top up the authority via faucet so it can cover the rent increase
+    // + write/retract/deploy fees. Underfunding mid-write leaves the program
+    // retracted (down), so prefer over-funding. Testnet only.
+    if std::env::args().any(|a| a == "--fund") {
+        println!("--fund: topping up authority via faucet...");
+        let sync_client = ArchRpcClient::new(&config);
+        for _ in 0..5 {
+            sync_client
+                .create_and_fund_account_with_faucet(&authority_keypair)
+                .map_err(|e| anyhow::anyhow!("faucet funding failed: {e}"))?;
+        }
+    }
 
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
