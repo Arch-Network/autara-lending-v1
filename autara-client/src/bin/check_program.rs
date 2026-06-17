@@ -1,4 +1,5 @@
-//! Read-only diagnostic for the Phase 4 (in-place upgrade) preconditions.
+//! Read-only diagnostic for the in-place upgrade preconditions (run before
+//! `upgrade_program`).
 //!
 //! Answers the two questions you must confirm before upgrading the Autara
 //! program on testnet:

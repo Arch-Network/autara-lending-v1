@@ -1,8 +1,19 @@
-# Autara Lending IDL — Path A import (explorer decoding, no redeploy)
+# Autara Lending IDL — explorer decoding
 
 Artifacts for getting Autara instructions decoded by the Arch Explorer's
-IDL-driven decoder (`arch-rust-indexer` PR #66 / `feat/idl-decoding*`) **without
-any contract change** — see `docs/idl-decoding-plan.md` for the full rationale.
+IDL-driven decoder (`arch-rust-indexer` PR #66 / `feat/idl-decoding*`) instead of
+rendering as opaque `Custom Instruction` blobs.
+
+There are two ways to get the IDL to the decoder, and this repo supports both:
+
+- **Import path** (this directory) — hand the indexer the canonical IDL JSON and
+  it decodes immediately, with **no contract change**. Reversible, fastest to
+  ship. This is what the runbook below covers.
+- **On-chain path** — the program publishes its own IDL on-chain under the
+  standard `anchor:idl` account, so any Anchor/Satellite-aware tool discovers it
+  without an out-of-band import. Implemented in this same PR by the on-chain
+  handler (`programs/autara-program/src/processor/idl.rs`) and the
+  `publish_idl` client bin; requires a program upgrade.
 
 ## Files
 
@@ -77,7 +88,8 @@ decoders left **undecoded**. So after importing the IDL you just re-request a tx
 
 ### Rule 0 — build WITHOUT PR #59 in the tree
 
-Per the PR's own design doc (`docs/idl-driven-decoding-and-generic-enrichment.md`):
+Per PR #66's own design doc (`docs/idl-driven-decoding-and-generic-enrichment.md`
+in the `arch-rust-indexer` repo):
 a program registered in `get_program_name` is **excluded from IDL candidacy** —
 builtin path and IDL path are mutually exclusive. PR #59 both registers the name
 ("Arch Lending Program") and adds `decode_arch_lending`, either of which prevents
@@ -178,5 +190,7 @@ test txs or a testnet sync covering known supply/borrow txs).
   `get_program_name` / `get_program_name_from_hex` registrations
   (`shared/src/program_ids.rs`). This is required, not optional: builtin
   registration excludes the program from IDL candidacy by design.
-- On-chain publishing (canonical IDL, requires adding a native IDL instruction +
-  redeploy) remains optional Path B — see `docs/idl-decoding-plan.md` §4.
+- On-chain publishing (the canonical IDL path) is implemented in this PR via the
+  native IDL handler (`processor/idl.rs`) and the `publish_idl` bin; it requires a
+  program upgrade (`upgrade_program`) and is the canonical alternative to the
+  import path above once the program is redeployed.

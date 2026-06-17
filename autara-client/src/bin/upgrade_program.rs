@@ -1,4 +1,4 @@
-//! Phase 4 — in-place upgrade of the LIVE Autara program at the SAME program id.
+//! In-place upgrade of the LIVE Autara program at the SAME program id.
 //!
 //! Thin wrapper over `autara_client::idl_deploy::upgrade_in_place` (the shared
 //! loader retract → resize → write → deploy flow). Reuses `keys/autara-stage.key`

@@ -1,7 +1,7 @@
-//! Phase 5 — publish Autara's IDL on-chain by driving our own program's IDL
-//! handler (processor/idl.rs) directly, since arch-cli can't reach the node/auth.
+//! Publish Autara's IDL on-chain by driving our own program's IDL handler
+//! (processor/idl.rs) directly, since arch-cli can't reach the node/auth.
 //!
-//! Flow (must run AFTER the program upgrade that adds the handler — Phase 4):
+//! Flow (must run AFTER `upgrade_program`, which adds the handler on-chain):
 //!   1. zlib-compress idl/autara_lending.idl.json
 //!   2. derive the anchor:idl account = create_with_seed(find_program_address([],id), "anchor:idl", id)
 //!   3. send IdlInstruction::Create { data_len } to allocate + init the account

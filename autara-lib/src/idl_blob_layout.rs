@@ -1,4 +1,4 @@
-//! Phase 3 verification for the published IDL (`idl/autara_lending.idl.json`).
+//! Borsh-size verification for the published IDL (`idl/autara_lending.idl.json`).
 //!
 //! `create_market` / `update_config` represent their nested config types as
 //! opaque fixed-size `u8` arrays. Those byte counts must equal the actual

@@ -1,4 +1,5 @@
-//! On-chain IDL account instruction handler (Path B).
+//! On-chain IDL account instruction handler — lets the program publish its own
+//! IDL on-chain (the canonical alternative to importing the IDL into the indexer).
 //!
 //! This is a **native port** of the IDL-account protocol that Arch's Satellite
 //! framework (`arch-satellite-lang`) injects into every `#[program]`. Autara is a
@@ -23,7 +24,7 @@
 //!   [44..]   zlib-compressed IDL JSON
 //!
 //! NOTE: This module has NOT been compiled in this environment. It must be built
-//! with `cargo-build-sbf` and exercised by integration tests (Phase 3) before any
+//! with `cargo-build-sbf` and exercised by integration tests before any
 //! deployment. Two constants and one runtime assumption are flagged `VERIFY`.
 
 use arch_program::{
@@ -219,7 +220,7 @@ fn idl_create_account(
     );
     // VERIFY: Arch's account model may require an anchoring UTXO for account
     // creation; confirm `create_account_with_seed` succeeds for the IDL account
-    // exactly as arch-cli drives it (Phase 3 integration test / throwaway program).
+    // exactly as arch-cli drives it (confirm via integration test / throwaway program).
     invoke_signed_unchecked(
         &ix,
         &[

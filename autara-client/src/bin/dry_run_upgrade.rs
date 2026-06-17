@@ -1,5 +1,6 @@
-//! Dry-run for Phase 4 — validates the upgrade flow against the testnet node on a
-//! THROWAWAY program id, so nothing touches the live lending program (6eQ1…).
+//! Dry-run for `upgrade_program` — validates the in-place upgrade flow against the
+//! testnet node on a THROWAWAY program id, so nothing touches the live lending
+//! program (6eQ1…).
 //!
 //! It does two things:
 //!   1. Fresh-deploy autara_program.so to a freshly generated program id using the
