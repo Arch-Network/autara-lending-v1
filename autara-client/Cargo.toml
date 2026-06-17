@@ -37,6 +37,7 @@ futures = { workspace = true }
 apl-associated-token-account.workspace = true
 dotenvy = "*"
 bs58 = "*"
+flate2 = "1"
 
 [[bin]]
 name = "autara-cli"
