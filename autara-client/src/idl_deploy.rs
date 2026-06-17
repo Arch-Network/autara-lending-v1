@@ -1,7 +1,7 @@
 //! Shared in-place program-upgrade flow (loader-v4 retract → resize → write →
 //! deploy), used by both `bin/upgrade_program` (live program) and
-//! `bin/dry_run_upgrade` (throwaway program) so the dry-run exercises the exact
-//! same code path that will run against the live program.
+//! `bin/dry_run_upgrade` (throwaway program) so the dry-run exercises the same
+//! code as the live upgrade.
 //!
 //! Mirrors `arch_sdk` helper `async_program_deployment.rs::write_program_elf`,
 //! reimplemented on the pinned 0.6.2 API because the 0.6.2 `ProgramDeployer` is
@@ -26,11 +26,38 @@ fn de<E: std::fmt::Display>(e: E) -> anyhow::Error {
     anyhow::anyhow!("{e}")
 }
 
+/// Base58 of a tx hash (matches how the explorer displays transaction ids; the
+/// `Hash` Display impl is hex, which the explorer doesn't use in its URLs).
+pub fn tx_b58(txid: &Hash) -> String {
+    bs58::encode(&txid.as_ref()[..]).into_string()
+}
+
+/// Explorer URL for a transaction (testnet). Verify the path against your
+/// explorer if it ever 404s — the base58 id above also works in the search box.
+pub fn explorer_tx(txid: &Hash) -> String {
+    format!(
+        "https://explorer.arch.network/testnet/transactions/{}",
+        tx_b58(txid)
+    )
+}
+
 async fn confirm(client: &AsyncArchRpcClient, txid: &Hash) -> anyhow::Result<()> {
     let tx = client.wait_for_processed_transaction(txid).await.map_err(de)?;
     if let Status::Failed(reason) = tx.status {
         anyhow::bail!("tx {txid} failed: {reason}");
     }
+    Ok(())
+}
+
+/// Send + confirm a single tx and print its id + explorer URL under `label`.
+async fn send_and_log(
+    client: &AsyncArchRpcClient,
+    tx: RuntimeTransaction,
+    label: &str,
+) -> anyhow::Result<()> {
+    let txid = client.send_transaction(tx).await.map_err(de)?;
+    confirm(client, &txid).await?;
+    println!("        {label} tx {}  {}", tx_b58(&txid), explorer_tx(&txid));
     Ok(())
 }
 
@@ -82,8 +109,7 @@ pub async fn upgrade_in_place(
             net,
         )
         .map_err(de)?;
-        let txid = client.send_transaction(tx).await.map_err(de)?;
-        confirm(client, &txid).await?;
+        send_and_log(client, tx, "retract").await?;
     }
 
     // 2. resize to new ELF size (transfer missing rent, then truncate)
@@ -107,8 +133,7 @@ pub async fn upgrade_in_place(
                 net,
             )
             .map_err(de)?;
-            let txid = client.send_transaction(tx).await.map_err(de)?;
-            confirm(client, &txid).await?;
+            send_and_log(client, tx, "rent-transfer").await?;
         }
         let bh = client.get_best_finalized_block_hash().await.map_err(de)?;
         let tx = build_and_sign_transaction(
@@ -125,8 +150,7 @@ pub async fn upgrade_in_place(
             net,
         )
         .map_err(de)?;
-        let txid = client.send_transaction(tx).await.map_err(de)?;
-        confirm(client, &txid).await?;
+        send_and_log(client, tx, "truncate").await?;
     }
 
     // 3. write ELF in chunks (batched)
@@ -161,8 +185,13 @@ pub async fn upgrade_in_place(
     for txid in &ids {
         confirm(client, txid).await?;
     }
+    if let (Some(first), Some(last)) = (ids.first(), ids.last()) {
+        println!("        wrote {} chunks", ids.len());
+        println!("        first write tx {}  {}", tx_b58(first), explorer_tx(first));
+        println!("        last  write tx {}  {}", tx_b58(last), explorer_tx(last));
+    }
 
-    // 4. deploy (make executable)
+    // 4. deploy (make executable) — this is the tx that re-activates the program
     println!("  [4/4] deploy");
     let bh = client.get_best_finalized_block_hash().await.map_err(de)?;
     let tx = build_and_sign_transaction(
@@ -175,8 +204,7 @@ pub async fn upgrade_in_place(
         net,
     )
     .map_err(de)?;
-    let txid = client.send_transaction(tx).await.map_err(de)?;
-    confirm(client, &txid).await?;
+    send_and_log(client, tx, "deploy (upgrade completion)").await?;
 
     // verify
     let acc = client.read_account_info(program_pubkey).await.map_err(de)?;

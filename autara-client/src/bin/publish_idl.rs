@@ -26,6 +26,7 @@ use arch_sdk::{
     build_and_sign_transaction, with_secret_key_file, AsyncArchRpcClient, Config, Status,
 };
 use autara_client::config::path_from_workspace;
+use autara_client::idl_deploy::{explorer_tx, tx_b58};
 use flate2::{write::ZlibEncoder, Compression};
 
 // Must match processor::idl. Reuse the program's own constant to avoid drift.
@@ -167,5 +168,6 @@ async fn send(
     if let Status::Failed(reason) = processed.status {
         anyhow::bail!("tx {txid} failed: {reason}");
     }
+    println!("        tx {}  {}", tx_b58(&txid), explorer_tx(&txid));
     Ok(())
 }
