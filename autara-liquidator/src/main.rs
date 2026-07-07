@@ -1,4 +1,5 @@
 mod config;
+mod propamm;
 mod router;
 mod scanner;
 
@@ -19,10 +20,7 @@ use crate::scanner::scan_liquidatable_positions;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let filter = tracing_subscriber::EnvFilter::builder()
-        .with_default_directive(tracing::Level::INFO.into())
-        .from_env_lossy();
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    tracing_subscriber::fmt::init();
 
     let args = Args::parse();
 
@@ -31,8 +29,15 @@ async fn main() -> Result<()> {
         serde_json::from_str(&config_str).context("failed to parse config file")?;
 
     let autara_program_id = parse_hex_pubkey(&config.autara_program_id)?;
+    let network = config.parse_network()?;
+    let dry_run = config.dry_run;
     let (liquidator_keypair, liquidator_pubkey) = config.load_keypair()?;
-    tracing::info!(?liquidator_pubkey, "Loaded liquidator keypair");
+    tracing::info!(
+        ?liquidator_pubkey,
+        ?network,
+        dry_run,
+        "Loaded liquidator keypair"
+    );
 
     let token_filter = TokenFilter::from_config(&config.restrict_tokens)?;
     if token_filter.is_active() {
@@ -42,21 +47,29 @@ async fn main() -> Result<()> {
         );
     }
 
+    let propamm = config.build_propamm()?;
+    if let Some(p) = &propamm {
+        tracing::info!(
+            program = ?p.program_id,
+            backend = %p.backend_url,
+            "PropAMM venue enabled — routing CLAMM vs PropAMM by output"
+        );
+    }
+
     if let Some(ref wp_config) = config.whirlpools_config {
         let wp_pubkey = parse_hex_pubkey(wp_config)?;
         set_whirlpools_config_address(WhirlpoolsConfigInput::Address(wp_pubkey))
             .map_err(|e| anyhow::anyhow!("failed to set whirlpools config: {}", e))?;
     }
 
-    let network = config.bitcoin_network()?;
-    tracing::info!(rpc_url = %config.rpc_url, network = %config.network, "Starting liquidator");
+    tracing::info!(rpc_url = %config.rpc_url, "Starting liquidator");
 
     let sdk_config = arch_sdk::Config {
         arch_node_url: config.rpc_url.clone(),
         node_endpoint: String::new(),
         node_username: String::new(),
         node_password: String::new(),
-        network,
+        network: arch_sdk::arch_program::bitcoin::Network::Regtest,
         titan_url: String::new(),
     };
     let arch_client = ArchRpcClient::new(&sdk_config);
@@ -85,6 +98,7 @@ async fn main() -> Result<()> {
                 scan_liquidatable_positions(
                     &read_client,
                     &router,
+                    propamm.as_ref(),
                     &token_filter,
                     &arch_client,
                     autara_program_id,
@@ -92,6 +106,7 @@ async fn main() -> Result<()> {
                     liquidator_pubkey,
                     &blockhash_cache,
                     network,
+                    dry_run,
                 )
                 .await;
             }

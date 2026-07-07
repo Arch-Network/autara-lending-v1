@@ -41,3 +41,11 @@ bs58 = "*"
 [[bin]]
 name = "autara-cli"
 path = "src/bin/cli.rs"
+
+# Test-only helper: creates an undercollateralized position in ONE atomic tx by
+# bundling [push inflated collateral price, (deposit), borrow] so the borrow is
+# valued at the inflated price. Once the real feeder price returns, the position
+# is underwater by construction (no oracle race). See docs/superpowers/specs.
+[[bin]]
+name = "over-borrow"
+path = "src/bin/over_borrow.rs"

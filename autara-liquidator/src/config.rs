@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use arch_sdk::arch_program::{
-    bitcoin::{Network, key::Keypair},
+    bitcoin::{key::Keypair, Network},
     pubkey::Pubkey,
 };
 use clap::Parser;
@@ -25,19 +25,42 @@ pub struct LiquidatorConfig {
     pub autara_program_id: String,
     /// Path to the liquidator keypair file
     pub liquidator_keypair: String,
-    /// Network the liquidator signs for: "mainnet", "testnet" or "regtest"
-    #[serde(default = "default_network")]
-    pub network: String,
     /// Whirlpools config address (hex). If omitted, uses the default.
     pub whirlpools_config: Option<String>,
+    /// Bitcoin network for signing. One of: "regtest", "testnet", "signet", "bitcoin".
+    #[serde(default = "default_network")]
+    pub network: String,
     /// Polling interval in seconds
     #[serde(default = "default_poll_interval")]
     pub poll_interval_secs: u64,
+    /// If true, the bot will skip broadcasting signed transactions (dry run).
+    #[serde(default)]
+    pub dry_run: bool,
     /// Optional set of token addresses (hex) to restrict scanning to.
     /// Only markets whose supply or collateral token is in this set will be considered.
     /// If omitted or empty, all markets are scanned.
     #[serde(default)]
     pub restrict_tokens: Vec<String>,
+    /// Optional PropAMM (RFQ vault AMM) liquidity venue. When present, the liquidator
+    /// quotes both CLAMM and PropAMM per liquidation and routes to the higher output.
+    #[serde(default)]
+    pub propamm: Option<PropAmmConfig>,
+}
+
+/// PropAMM venue configuration (all pubkeys hex). See prop-amm/deployments.testnet.json.
+#[derive(Debug, Deserialize)]
+pub struct PropAmmConfig {
+    pub program_id: String,
+    pub config_pubkey: String,
+    /// Path to the quote_signer keypair (must co-sign every PropAMM swap).
+    pub quote_signer_keypair: String,
+    pub base_mint: String,
+    pub quote_mint: String,
+    pub base_vault: String,
+    pub quote_vault: String,
+    pub base_decimals: u32,
+    pub quote_decimals: u32,
+    pub backend_url: String,
 }
 
 impl LiquidatorConfig {
@@ -46,14 +69,37 @@ impl LiquidatorConfig {
             .context("failed to load liquidator keypair")
     }
 
-    /// Bitcoin network used for transaction signing, mapped the same way as
-    /// autara-deploy (mainnet -> Bitcoin, testnet -> Testnet4, regtest -> Regtest).
-    pub fn bitcoin_network(&self) -> Result<Network> {
+    /// Build the PropAMM venue client if configured.
+    pub fn build_propamm(&self) -> Result<Option<crate::propamm::PropAmm>> {
+        let Some(c) = &self.propamm else {
+            return Ok(None);
+        };
+        let (quote_signer_kp, quote_signer_pk) =
+            arch_sdk::with_secret_key_file(&c.quote_signer_keypair)
+                .context("failed to load propamm quote_signer keypair")?;
+        Ok(Some(crate::propamm::PropAmm {
+            program_id: parse_hex_pubkey(&c.program_id)?,
+            config_pubkey: parse_hex_pubkey(&c.config_pubkey)?,
+            quote_signer_kp,
+            quote_signer_pk,
+            base_mint: parse_hex_pubkey(&c.base_mint)?,
+            quote_mint: parse_hex_pubkey(&c.quote_mint)?,
+            base_vault: parse_hex_pubkey(&c.base_vault)?,
+            quote_vault: parse_hex_pubkey(&c.quote_vault)?,
+            base_decimals: c.base_decimals,
+            quote_decimals: c.quote_decimals,
+            backend_url: c.backend_url.clone(),
+        }))
+    }
+
+    pub fn parse_network(&self) -> Result<Network> {
         match self.network.as_str() {
-            "mainnet" => Ok(Network::Bitcoin),
-            "testnet" => Ok(Network::Testnet4),
             "regtest" => Ok(Network::Regtest),
-            other => anyhow::bail!("unknown network '{other}' (expected mainnet/testnet/regtest)"),
+            "testnet" | "testnet3" => Ok(Network::Testnet),
+            "testnet4" => Ok(Network::Testnet4),
+            "signet" => Ok(Network::Signet),
+            "bitcoin" | "mainnet" => Ok(Network::Bitcoin),
+            other => Err(anyhow::anyhow!("unknown network: {}", other)),
         }
     }
 }
