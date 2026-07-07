@@ -204,11 +204,16 @@ impl AutaraReadClientImpl {
     async fn load_program_accounts_pod<T: Pod + Send>(
         &self,
         program_id: &Pubkey,
-        filters: Option<Vec<AccountFilter>>,
+        _filters: Option<Vec<AccountFilter>>,
     ) -> anyhow::Result<HashMap<Pubkey, T>> {
+        // Some RPC nodes (observed on mainnet) evaluate server-side DataSize
+        // filters incorrectly: the Market-sized filter returns no results even
+        // though an unfiltered scan returns the market account. The pod mapper
+        // (bytemuck::try_from_bytes) already rejects wrong-sized accounts, so
+        // fetch unfiltered and let the parse do the size filtering.
         let accounts = self
             .arch_client
-            .get_program_accounts_pod::<T>(program_id, filters)
+            .get_program_accounts_pod::<T>(program_id, None)
             .await
             .context("failed to load program accounts")?;
         Ok(accounts.collect())
