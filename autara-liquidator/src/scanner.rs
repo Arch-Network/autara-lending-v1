@@ -207,60 +207,91 @@ pub async fn scan_liquidatable_positions(
                 continue;
             }
 
+            // Whether to run the CLAMM atomic path: either it won the routing, or the
+            // PropAMM-routed liquidation failed before liquidating (fallback).
+            let mut try_clamm = !use_propamm;
+
             if use_propamm {
                 // Decoupled path: PropAMM cannot be an atomic liquidate callback (its quote_signer
                 // must co-sign), so liquidate WITHOUT a callback (repay from the bot's float) and
                 // then swap the seized collateral on PropAMM in a separate tx.
-                let tx_to_sign = match tx_builder
-                    .liquidate(market_key, &position_key, None, None, None)
-                    .await
-                {
-                    Ok(tx) => tx,
-                    Err(e) => {
-                        tracing::error!("Failed to build liquidate tx: {:#}", e);
-                        continue;
-                    }
-                };
-                let signed_tx = tx_to_sign.sign(&[keypair.clone()], network);
-                match tx_broadcast.broadcast_transaction(signed_tx).await {
-                    Ok(events) => tracing::info!(
-                        "Liquidation SUCCESS (no-callback, PropAMM route) position={:?} market={:?} events={:?}",
-                        position_key,
-                        market_key,
-                        events,
-                    ),
-                    Err(e) => {
-                        tracing::error!(
-                            "Liquidation FAILED for position={:?} market={:?}: {:#}",
+                //
+                // `liquidated` is true once the liquidate tx landed; a failure BEFORE that
+                // (e.g. insufficient aUSD float to repay) falls back to the atomic CLAMM
+                // path below if a CLAMM route exists. A failure AFTER (the PropAMM swap
+                // itself) must NOT fall back — the position is already liquidated.
+                let liquidated = 'propamm: {
+                    let tx_to_sign = match tx_builder
+                        .liquidate(market_key, &position_key, None, None, None)
+                        .await
+                    {
+                        Ok(tx) => tx,
+                        Err(e) => {
+                            tracing::error!("Failed to build liquidate tx (PropAMM route): {:#}", e);
+                            break 'propamm false;
+                        }
+                    };
+                    let signed_tx = tx_to_sign.sign(&[keypair.clone()], network);
+                    match tx_broadcast.broadcast_transaction(signed_tx).await {
+                        Ok(events) => tracing::info!(
+                            "Liquidation SUCCESS (no-callback, PropAMM route) position={:?} market={:?} events={:?}",
                             position_key,
                             market_key,
+                            events,
+                        ),
+                        Err(e) => {
+                            tracing::error!(
+                                "Liquidation FAILED (PropAMM route) for position={:?} market={:?}: {:#}",
+                                position_key,
+                                market_key,
+                                e,
+                            );
+                            break 'propamm false;
+                        }
+                    }
+                    // Swap the just-seized collateral -> supply on PropAMM.
+                    let p = propamm.expect("propamm route implies propamm configured");
+                    let price = propamm_quote.expect("propamm route implies a quote").0;
+                    match p
+                        .execute_swap(arch_client, keypair, signer, &collateral_mint, &supply_mint, collateral_atoms, price, network)
+                        .await
+                    {
+                        Ok(out) => tracing::info!(
+                            "PropAMM swap SUCCESS position={:?} collateral_in={} supply_out~{}",
+                            position_key,
+                            collateral_atoms,
+                            out,
+                        ),
+                        Err(e) => tracing::error!(
+                            "PropAMM swap FAILED after liquidation (seized collateral held by liquidator) position={:?}: {:#}",
+                            position_key,
                             e,
+                        ),
+                    }
+                    true
+                };
+                if !liquidated {
+                    if clamm.is_some() {
+                        tracing::warn!(
+                            "Falling back to CLAMM atomic path for position={:?}",
+                            position_key,
                         );
+                        try_clamm = true;
+                    } else {
                         continue;
                     }
                 }
-                // Swap the just-seized collateral -> supply on PropAMM.
-                let p = propamm.expect("propamm route implies propamm configured");
-                let price = propamm_quote.expect("propamm route implies a quote").0;
-                match p
-                    .execute_swap(arch_client, keypair, signer, &collateral_mint, &supply_mint, collateral_atoms, price, network)
-                    .await
-                {
-                    Ok(out) => tracing::info!(
-                        "PropAMM swap SUCCESS position={:?} collateral_in={} supply_out~{}",
-                        position_key,
-                        collateral_atoms,
-                        out,
-                    ),
-                    Err(e) => tracing::error!(
-                        "PropAMM swap FAILED after liquidation (seized collateral held by liquidator) position={:?}: {:#}",
-                        position_key,
-                        e,
-                    ),
-                }
-            } else {
+            }
+
+            if try_clamm {
                 // Atomic path: CLAMM swap as a CPI callback inside the liquidate instruction.
-                let (_pool, swap_ix, _) = clamm.expect("clamm route implies a clamm quote");
+                let Some((_pool, swap_ix, _)) = clamm else {
+                    tracing::warn!(
+                        "No CLAMM route available for position={:?}; skipping",
+                        position_key,
+                    );
+                    continue;
+                };
                 let ix_callback = swap_ix.instructions.into_iter().next();
                 let tx_to_sign = match tx_builder
                     .liquidate(market_key, &position_key, None, None, ix_callback)
