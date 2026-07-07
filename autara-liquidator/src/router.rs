@@ -1,13 +1,13 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
 use anyhow::Result;
 use arch_sdk::{ArchRpcClient, arch_program::pubkey::Pubkey};
 use orca_whirlpools::{
-    InitializedPool, PoolInfo, SwapInstructions, SwapQuote, SwapType,
-    fetch_whirlpools_by_token_pair, swap_instructions_with_options,
+    PoolInfo, SwapInstructions, SwapQuote, SwapType, fetch_whirlpools_by_token_pair,
+    swap_instructions_with_options,
 };
 use tokio::sync::RwLock;
 
@@ -21,16 +21,22 @@ fn sort_pair(a: Pubkey, b: Pubkey) -> (Pubkey, Pubkey) {
     if a < b { (a, b) } else { (b, a) }
 }
 
-type PoolCache = HashMap<(Pubkey, Pubkey), Vec<InitializedPool>>;
+type PoolCache = HashMap<(Pubkey, Pubkey), Vec<Pubkey>>;
 
 /// A swap router service that discovers whirlpool pools and finds the best
 /// quote among available pools.
 ///
 /// Pool discovery runs periodically via `maybe_refresh_pools()`. The cache is
 /// behind a `tokio::sync::RwLock` so quoting only needs `&self`.
+///
+/// Pairs can also be pinned to explicit pool addresses via `add_static_pool`
+/// (from the `clamm_pools` config): pinned pairs skip on-chain discovery
+/// entirely, which matters on RPC nodes where the get-program-accounts scan
+/// used by `fetch_whirlpools_by_token_pair` fails (e.g. mainnet).
 pub struct SwapRouter {
     rpc: ArchRpcClient,
     pool_cache: RwLock<PoolCache>,
+    static_pairs: RwLock<HashSet<(Pubkey, Pubkey)>>,
     last_discovery: RwLock<Option<Instant>>,
 }
 
@@ -39,8 +45,26 @@ impl SwapRouter {
         Self {
             rpc,
             pool_cache: RwLock::new(HashMap::new()),
+            static_pairs: RwLock::new(HashSet::new()),
             last_discovery: RwLock::new(None),
         }
+    }
+
+    /// Pin an explicit pool address for a token pair, bypassing discovery.
+    pub async fn add_static_pool(&self, token_a: Pubkey, token_b: Pubkey, pool: Pubkey) {
+        let key = sort_pair(token_a, token_b);
+        let mut cache = self.pool_cache.write().await;
+        let pools = cache.entry(key).or_default();
+        if !pools.contains(&pool) {
+            pools.push(pool);
+        }
+        self.static_pairs.write().await.insert(key);
+        tracing::info!(
+            "Pinned static pool {:?} for {:?} <-> {:?}",
+            pool,
+            key.0,
+            key.1,
+        );
     }
 
     /// Register a token pair for discovery.
@@ -65,8 +89,16 @@ impl SwapRouter {
             return;
         }
 
-        let pairs: Vec<(Pubkey, Pubkey)> =
-            { self.pool_cache.read().await.keys().copied().collect() };
+        let pairs: Vec<(Pubkey, Pubkey)> = {
+            let statics = self.static_pairs.read().await;
+            self.pool_cache
+                .read()
+                .await
+                .keys()
+                .filter(|k| !statics.contains(k))
+                .copied()
+                .collect()
+        };
 
         if pairs.is_empty() {
             *self.last_discovery.write().await = Some(Instant::now());
@@ -116,7 +148,7 @@ impl SwapRouter {
             .read()
             .await
             .get(&key)
-            .map(|pools| pools.iter().map(|p| p.address).collect())
+            .cloned()
             .unwrap_or_default();
 
         if pool_addresses.is_empty() {
@@ -168,15 +200,15 @@ async fn fetch_initialized_pools(
     rpc: &ArchRpcClient,
     token_a: Pubkey,
     token_b: Pubkey,
-) -> Result<Vec<InitializedPool>> {
+) -> Result<Vec<Pubkey>> {
     let pools = fetch_whirlpools_by_token_pair(rpc, token_a, token_b)
         .await
         .map_err(|e| anyhow::anyhow!("failed to fetch pools: {}", e))?;
 
-    let initialized: Vec<InitializedPool> = pools
+    let initialized: Vec<Pubkey> = pools
         .into_iter()
         .filter_map(|p| match p {
-            PoolInfo::Initialized(pool) => Some(pool),
+            PoolInfo::Initialized(pool) => Some(pool.address),
             PoolInfo::Uninitialized(_) => None,
         })
         .collect();

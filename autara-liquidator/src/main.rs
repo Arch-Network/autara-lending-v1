@@ -79,6 +79,16 @@ async fn main() -> Result<()> {
 
     let mut read_client = AutaraReadClientImpl::new(arch_client.clone(), autara_program_id);
     let router = Arc::new(SwapRouter::new(arch_client.clone()));
+
+    for pinned in &config.clamm_pools {
+        let pool = parse_hex_pubkey(&pinned.pool)?;
+        let token_a = parse_hex_pubkey(&pinned.token_a)?;
+        let token_b = parse_hex_pubkey(&pinned.token_b)?;
+        if let Err(e) = arch_client.read_account_info(pool).await {
+            tracing::warn!("Pinned CLAMM pool {:?} not readable on-chain: {:#}", pool, e);
+        }
+        router.add_static_pool(token_a, token_b, pool).await;
+    }
     let blockhash_cache = BlockhashCache::new(arch_client.clone(), None).await?;
 
     let poll_interval = Duration::from_secs(config.poll_interval_secs);

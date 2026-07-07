@@ -45,6 +45,19 @@ pub struct LiquidatorConfig {
     /// quotes both CLAMM and PropAMM per liquidation and routes to the higher output.
     #[serde(default)]
     pub propamm: Option<PropAmmConfig>,
+    /// Optional explicit CLAMM pools (all pubkeys hex). Pinned pairs skip on-chain
+    /// pool discovery, which is required on RPC nodes where the program-accounts
+    /// scan behind fetch_whirlpools_by_token_pair fails (e.g. mainnet).
+    #[serde(default)]
+    pub clamm_pools: Vec<ClammPoolConfig>,
+}
+
+/// An explicit CLAMM whirlpool for a token pair (all pubkeys hex).
+#[derive(Debug, Deserialize)]
+pub struct ClammPoolConfig {
+    pub pool: String,
+    pub token_a: String,
+    pub token_b: String,
 }
 
 /// PropAMM venue configuration (all pubkeys hex). See prop-amm/deployments.testnet.json.

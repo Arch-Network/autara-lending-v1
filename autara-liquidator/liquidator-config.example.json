@@ -9,5 +9,12 @@
   "restrict_tokens": [
     "aec8ca1598d74bc27721536f1a88b5648740bc6a856546a0a47817ff7fe7437c",
     "225b03d6f9e05fd834cd18906b019fb46372544b0eeb9f6f8b615472467d46b0"
+  ],
+  "clamm_pools": [
+    {
+      "pool": "7caf3541b5d2d9bf06453480acbed988c1c9ebe9ff0edf6deb2f17e0e2e9cb32",
+      "token_a": "225b03d6f9e05fd834cd18906b019fb46372544b0eeb9f6f8b615472467d46b0",
+      "token_b": "aec8ca1598d74bc27721536f1a88b5648740bc6a856546a0a47817ff7fe7437c"
+    }
   ]
 }
