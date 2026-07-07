@@ -20,7 +20,10 @@ use crate::scanner::scan_liquidatable_positions;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    let filter = tracing_subscriber::EnvFilter::builder()
+        .with_default_directive(tracing::Level::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let args = Args::parse();
 
@@ -69,7 +72,7 @@ async fn main() -> Result<()> {
         node_endpoint: String::new(),
         node_username: String::new(),
         node_password: String::new(),
-        network: arch_sdk::arch_program::bitcoin::Network::Regtest,
+        network,
         titan_url: String::new(),
     };
     let arch_client = ArchRpcClient::new(&sdk_config);

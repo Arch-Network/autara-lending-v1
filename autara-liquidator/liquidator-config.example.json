@@ -1,13 +1,13 @@
 {
-  "rpc_url": "https://rpc.testnet.arch.network",
-  "autara_program_id": "53def2dc8516302842b10e356914d2a5f6b33425ba42aec684f706aa1cf64192",
-  "liquidator_keypair": "keys/autara-admin-stage.key",
-  "whirlpools_config": "082ca6fdbe135aa0ec1b3e0561091924d1a0ac9a34e4a3664d8e7a374abc21ce",
-  "network": "testnet",
-  "dry_run": true,
+  "rpc_url": "https://rpc.mainnet.arch.network",
+  "autara_program_id": "19da5f9b75103d4384b5b78e4b7535198ab0c788578df142db5992a62e30bad0",
+  "liquidator_keypair": "keys/liquidator.key",
+  "network": "mainnet",
+  "whirlpools_config": "091a35a0f3dba0abd49a34d103ebc500e77ad1af30afa1bb028271d6ee0dec7f",
   "poll_interval_secs": 5,
+  "dry_run": false,
   "restrict_tokens": [
-    "ce6c3433c5d6ce3fdae9c6d14db01c6ad5abed8f9c913cdf71a43d019ec3ddd5",
-    "cf57694f9bd8cc3273cddf1371eb0f27130ae7f14ecaf5c948588c7555fec89c"
+    "aec8ca1598d74bc27721536f1a88b5648740bc6a856546a0a47817ff7fe7437c",
+    "225b03d6f9e05fd834cd18906b019fb46372544b0eeb9f6f8b615472467d46b0"
   ]
 }
