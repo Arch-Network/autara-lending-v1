@@ -94,8 +94,30 @@ pub async fn scan_liquidatable_positions(
                 health.collateral_atoms,
             );
 
-            // Find a swap route: collateral -> supply (to repay debt)
-            let collateral_atoms = health.collateral_atoms;
+            // Swap only the collateral the liquidation will actually pay out
+            // (repay value + bonus, capped by the position), mirroring the
+            // on-chain computation. Swapping the full position collateral would
+            // overdraw the liquidator ATA, since the callback runs after the
+            // program transfers just the seized amount.
+            // u64::MAX matches the `None` max-repay the tx builder sends.
+            let collateral_atoms = match market_wrapper
+                .compute_liquidation_result_with_fee(&borrow_position, u64::MAX)
+                .map_err(anyhow::Error::from)
+                .and_then(|(_, result)| {
+                    result
+                        .total_collateral_atoms_to_liquidate()
+                        .map_err(anyhow::Error::from)
+                }) {
+                Ok(atoms) => atoms,
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to compute liquidation preview for position={:?}: {:#}",
+                        position_key,
+                        e,
+                    );
+                    continue;
+                }
+            };
 
             let quote_result = match tokio::time::timeout(
                 std::time::Duration::from_secs(10),
