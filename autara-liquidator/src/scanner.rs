@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arch_sdk::ArchRpcClient;
+use arch_sdk::arch_program::bitcoin::Network;
 use arch_sdk::arch_program::bitcoin::key::Keypair;
 use arch_sdk::arch_program::pubkey::Pubkey;
 use autara_client::client::blockhash_cache::BlockhashCache;
@@ -22,6 +23,7 @@ pub async fn scan_liquidatable_positions(
     keypair: &Keypair,
     signer: Pubkey,
     blockhash_cache: &BlockhashCache,
+    network: Network,
 ) {
     let mut liquidatable_count = 0u64;
 
@@ -78,7 +80,7 @@ pub async fn scan_liquidatable_positions(
 
         let unhealthy_ltv = market_wrapper.market().config().ltv_config().unhealthy_ltv;
 
-        if health.ltv >= unhealthy_ltv || true {
+        if health.ltv >= unhealthy_ltv {
             liquidatable_count += 1;
 
             tracing::info!(
@@ -163,27 +165,26 @@ pub async fn scan_liquidatable_positions(
                 }
             };
 
-            // let network = arch_sdk::arch_program::bitcoin::Network::Regtest;
-            // let signed_tx = tx_to_sign.sign(&[keypair.clone()], network);
+            let signed_tx = tx_to_sign.sign(&[keypair.clone()], network);
 
-            // match tx_broadcast.broadcast_transaction(signed_tx).await {
-            //     Ok(events) => {
-            //         tracing::info!(
-            //             "Liquidation SUCCESS for position={:?} market={:?} events={:?}",
-            //             position_key,
-            //             market_key,
-            //             events,
-            //         );
-            //     }
-            //     Err(e) => {
-            //         tracing::error!(
-            //             "Liquidation FAILED for position={:?} market={:?}: {:#}",
-            //             position_key,
-            //             market_key,
-            //             e,
-            //         );
-            //     }
-            // }
+            match tx_broadcast.broadcast_transaction(signed_tx).await {
+                Ok(events) => {
+                    tracing::info!(
+                        "Liquidation SUCCESS for position={:?} market={:?} events={:?}",
+                        position_key,
+                        market_key,
+                        events,
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Liquidation FAILED for position={:?} market={:?}: {:#}",
+                        position_key,
+                        market_key,
+                        e,
+                    );
+                }
+            }
         }
     }
 

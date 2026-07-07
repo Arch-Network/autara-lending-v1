@@ -1,7 +1,10 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
-use arch_sdk::arch_program::{bitcoin::key::Keypair, pubkey::Pubkey};
+use arch_sdk::arch_program::{
+    bitcoin::{Network, key::Keypair},
+    pubkey::Pubkey,
+};
 use clap::Parser;
 use serde::Deserialize;
 
@@ -22,6 +25,9 @@ pub struct LiquidatorConfig {
     pub autara_program_id: String,
     /// Path to the liquidator keypair file
     pub liquidator_keypair: String,
+    /// Network the liquidator signs for: "mainnet", "testnet" or "regtest"
+    #[serde(default = "default_network")]
+    pub network: String,
     /// Whirlpools config address (hex). If omitted, uses the default.
     pub whirlpools_config: Option<String>,
     /// Polling interval in seconds
@@ -39,10 +45,25 @@ impl LiquidatorConfig {
         arch_sdk::with_secret_key_file(&self.liquidator_keypair)
             .context("failed to load liquidator keypair")
     }
+
+    /// Bitcoin network used for transaction signing, mapped the same way as
+    /// autara-deploy (mainnet -> Bitcoin, testnet -> Testnet4, regtest -> Regtest).
+    pub fn bitcoin_network(&self) -> Result<Network> {
+        match self.network.as_str() {
+            "mainnet" => Ok(Network::Bitcoin),
+            "testnet" => Ok(Network::Testnet4),
+            "regtest" => Ok(Network::Regtest),
+            other => anyhow::bail!("unknown network '{other}' (expected mainnet/testnet/regtest)"),
+        }
+    }
 }
 
 fn default_poll_interval() -> u64 {
     5
+}
+
+fn default_network() -> String {
+    "regtest".to_string()
 }
 
 pub fn parse_hex_pubkey(hex_str: &str) -> Result<Pubkey> {

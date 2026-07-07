@@ -19,7 +19,10 @@ use crate::scanner::scan_liquidatable_positions;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    let filter = tracing_subscriber::EnvFilter::builder()
+        .with_default_directive(tracing::Level::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let args = Args::parse();
 
@@ -45,14 +48,15 @@ async fn main() -> Result<()> {
             .map_err(|e| anyhow::anyhow!("failed to set whirlpools config: {}", e))?;
     }
 
-    tracing::info!(rpc_url = %config.rpc_url, "Starting liquidator");
+    let network = config.bitcoin_network()?;
+    tracing::info!(rpc_url = %config.rpc_url, network = %config.network, "Starting liquidator");
 
     let sdk_config = arch_sdk::Config {
         arch_node_url: config.rpc_url.clone(),
         node_endpoint: String::new(),
         node_username: String::new(),
         node_password: String::new(),
-        network: arch_sdk::arch_program::bitcoin::Network::Regtest,
+        network,
         titan_url: String::new(),
     };
     let arch_client = ArchRpcClient::new(&sdk_config);
@@ -87,6 +91,7 @@ async fn main() -> Result<()> {
                     &liquidator_keypair,
                     liquidator_pubkey,
                     &blockhash_cache,
+                    network,
                 )
                 .await;
             }
