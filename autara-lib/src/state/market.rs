@@ -1515,6 +1515,274 @@ pub mod tests {
         use super::*;
         use proptest::prelude::*;
 
+        /// Regression proptests for the program-flow audit findings.
+        mod audit_regressions {
+            use super::*;
+            use crate::constant::SECONDS_PER_YEAR;
+            use crate::oracle::oracle_config::OracleConfig;
+
+            fn sum_position_collateral(positions: &[BorrowPosition]) -> u64 {
+                positions
+                    .iter()
+                    .map(|p| p.collateral_deposited_atoms())
+                    .sum()
+            }
+
+            proptest! {
+                /// The collateral vault total must equal the sum of the collateral still
+                /// held by positions, after *any* sequence of operations. Liquidation and
+                /// socialize_loss used to move tokens out of the vault while leaving the
+                /// vault counter untouched, so the counter drifted upward permanently.
+                ///
+                /// Failed operations are rolled back, since on-chain a failing instruction
+                /// reverts the whole transaction and never persists a partial mutation.
+                #[test]
+                fn collateral_vault_total_always_equals_sum_of_positions(
+                    collaterals in prop::collection::vec(1_000_000u64..200_000_000u64, 1..4),
+                    borrows in prop::collection::vec(1_000u64..40_000u64, 1..4),
+                    crash_price in 1u64..90_000u64,
+                    op_codes in prop::collection::vec(0u8..3u8, 1..8),
+                ) {
+                    let mut market = create_btc_usdc_market();
+                    let collateral_oracle = default_btc_oracle_rate();
+                    let supply_oracle = default_usd_oracle_rate();
+                    let n = collaterals.len().min(borrows.len());
+                    let mut positions = Vec::new();
+                    for i in 0..n {
+                        let mut position = BorrowPosition::default();
+                        market.deposit_collateral(&mut position, collaterals[i]).unwrap();
+                        let _ = market.borrow(
+                            &mut position,
+                            USDC(borrows[i] as f64),
+                            &supply_oracle,
+                            &collateral_oracle,
+                        );
+                        positions.push(position);
+                    }
+                    prop_assert_eq!(
+                        market.collateral_vault().total_collateral_atoms(),
+                        sum_position_collateral(&positions)
+                    );
+
+                    let crashed = OracleRate::new(
+                        IFixedPoint::from_num(crash_price),
+                        IFixedPoint::zero(),
+                    );
+                    for (i, code) in op_codes.iter().enumerate() {
+                        let idx = i % positions.len();
+                        // snapshot to emulate the runtime reverting a failed instruction
+                        let market_before = market;
+                        let positions_before = positions.clone();
+                        let result = match code {
+                            0 => market
+                                .liquidate(&mut positions[idx], &crashed, &supply_oracle, u64::MAX)
+                                .map(|_| ()),
+                            1 => market
+                                .socialize_loss(&mut positions[idx], &crashed, &supply_oracle)
+                                .map(|_| ()),
+                            _ => {
+                                let half = positions[idx].collateral_deposited_atoms() / 2;
+                                market.withdraw_collateral(
+                                    &mut positions[idx],
+                                    half,
+                                    &crashed,
+                                    &supply_oracle,
+                                )
+                            }
+                        };
+                        if result.is_err() {
+                            market = market_before;
+                            positions = positions_before;
+                        }
+                        prop_assert_eq!(
+                            market.collateral_vault().total_collateral_atoms(),
+                            sum_position_collateral(&positions),
+                            "drift after op {:?} on position {}", code, idx
+                        );
+                    }
+                }
+
+                /// Seized collateral must be conserved: whatever leaves a position during a
+                /// liquidation must leave the vault counter by exactly the same amount.
+                #[test]
+                fn liquidation_moves_exactly_the_seized_amount_out_of_the_vault(
+                    collateral in 10_000_000u64..200_000_000u64,
+                    borrow_usdc in 5_000u64..40_000u64,
+                    crash_price in 1u64..90_000u64,
+                    max_repay_usdc in 1u64..100_000u64,
+                ) {
+                    let mut market = create_btc_usdc_market();
+                    let collateral_oracle = default_btc_oracle_rate();
+                    let supply_oracle = default_usd_oracle_rate();
+                    let mut position = BorrowPosition::default();
+                    market.deposit_collateral(&mut position, collateral).unwrap();
+                    if market.borrow(
+                        &mut position,
+                        USDC(borrow_usdc as f64),
+                        &supply_oracle,
+                        &collateral_oracle,
+                    ).is_err() {
+                        return Ok(());
+                    }
+                    let crashed = OracleRate::new(
+                        IFixedPoint::from_num(crash_price),
+                        IFixedPoint::zero(),
+                    );
+                    let vault_before = market.collateral_vault().total_collateral_atoms();
+                    let position_before = position.collateral_deposited_atoms();
+                    if let Ok(result) = market.liquidate(
+                        &mut position,
+                        &crashed,
+                        &supply_oracle,
+                        USDC(max_repay_usdc as f64),
+                    ) {
+                        let seized = result
+                            .liquidation_result_with_bonus
+                            .total_collateral_atoms_to_liquidate()
+                            .unwrap();
+                        let vault_after = market.collateral_vault().total_collateral_atoms();
+                        let position_after = position.collateral_deposited_atoms();
+                        prop_assert_eq!(vault_before - vault_after, seized);
+                        prop_assert_eq!(position_before - position_after, seized);
+                        prop_assert!(vault_after >= position_after);
+                    }
+                }
+
+                /// Socializing a loss zeroes the position's collateral, so the vault counter
+                /// must drop by exactly that amount.
+                #[test]
+                fn socialize_loss_moves_all_position_collateral_out_of_the_vault(
+                    collateral in 10_000_000u64..200_000_000u64,
+                    borrow_usdc in 5_000u64..40_000u64,
+                ) {
+                    let mut market = create_btc_usdc_market();
+                    let collateral_oracle = default_btc_oracle_rate();
+                    let supply_oracle = default_usd_oracle_rate();
+                    let mut position = BorrowPosition::default();
+                    market.deposit_collateral(&mut position, collateral).unwrap();
+                    if market.borrow(
+                        &mut position,
+                        USDC(borrow_usdc as f64),
+                        &supply_oracle,
+                        &collateral_oracle,
+                    ).is_err() {
+                        return Ok(());
+                    }
+                    // price low enough that ltv >= 1, which socialize_loss requires
+                    let crashed = OracleRate::new(IFixedPoint::from_num(1), IFixedPoint::zero());
+                    let vault_before = market.collateral_vault().total_collateral_atoms();
+                    let held = position.collateral_deposited_atoms();
+                    let (_debt, withdrawn) = market
+                        .socialize_loss(&mut position, &crashed, &supply_oracle)
+                        .unwrap();
+                    prop_assert_eq!(withdrawn, held);
+                    prop_assert_eq!(position.collateral_deposited_atoms(), 0);
+                    prop_assert_eq!(
+                        market.collateral_vault().total_collateral_atoms(),
+                        vault_before - held
+                    );
+                }
+
+                /// A Chaos oracle with `required_signatures == 0` accepts entirely unsigned
+                /// prices. It is rejected at vault initialization, and must be rejected when
+                /// the config is swapped on a live market too.
+                #[test]
+                fn set_oracle_config_accepts_exactly_the_valid_chaos_configs(
+                    required_signatures in 0u8..=16u8,
+                    feed in prop::array::uniform32(0u8..=255u8),
+                ) {
+                    let mut market = create_btc_usdc_market();
+                    let config = OracleConfig::new_chaos(feed, Pubkey::new_unique(), required_signatures);
+                    let supply = market.set_supply_oracle_config(config);
+                    let collateral = market.set_collateral_oracle_config(config);
+                    if required_signatures == 0 {
+                        prop_assert_eq!(supply.unwrap_err(), LendingError::InvalidOracleConfig);
+                        prop_assert_eq!(collateral.unwrap_err(), LendingError::InvalidOracleConfig);
+                    } else {
+                        prop_assert!(supply.is_ok());
+                        prop_assert!(collateral.is_ok());
+                    }
+                }
+
+                /// A Pyth config carries no extra invariant, so it is always accepted.
+                #[test]
+                fn set_oracle_config_always_accepts_pyth(
+                    feed in prop::array::uniform32(0u8..=255u8),
+                ) {
+                    let mut market = create_btc_usdc_market();
+                    let config = OracleConfig::new_pyth(feed, Pubkey::new_unique());
+                    prop_assert!(market.set_supply_oracle_config(config).is_ok());
+                    prop_assert!(market.set_collateral_oracle_config(config).is_ok());
+                }
+
+                /// `sync_clock` applies whatever fee is set when it runs across the whole
+                /// elapsed window. Syncing before a fee change (what the fixed processor
+                /// does) must therefore never collect more than raising the fee first and
+                /// letting it apply retroactively to already-accrued interest.
+                #[test]
+                fn syncing_before_a_fee_raise_never_collects_more_than_raising_first(
+                    elapsed_before in 3_600u64..SECONDS_PER_YEAR,
+                    elapsed_after in 3_600u64..SECONDS_PER_YEAR,
+                    low_fee_bps in 0u64..400u64,
+                    high_fee_bps in 800u64..2_000u64,
+                    borrow_usdc in 10_000u64..500_000u64,
+                ) {
+                    let build = || {
+                        let mut market = create_btc_usdc_market();
+                        market.config_mut().set_lending_market_fee(low_fee_bps as u16).unwrap();
+                        let mut position = BorrowPosition::default();
+                        let collateral_oracle = default_btc_oracle_rate();
+                        let supply_oracle = default_usd_oracle_rate();
+                        market.deposit_collateral(&mut position, BTC(100.)).unwrap();
+                        market.borrow(
+                            &mut position,
+                            USDC(borrow_usdc as f64),
+                            &supply_oracle,
+                            &collateral_oracle,
+                        ).unwrap();
+                        market
+                    };
+                    let total_fees = |market: &Market| -> u64 {
+                        let summary = market.supply_vault().get_summary().unwrap();
+                        summary.pending_curator_fee_atoms + summary.pending_protocol_fee_atoms
+                    };
+                    let t1 = elapsed_before as i64;
+                    let t2 = (elapsed_before + elapsed_after) as i64;
+
+                    // fixed ordering: accrue at the old fee, then raise it
+                    let mut fixed = build();
+                    fixed.sync_clock(t1).unwrap();
+                    fixed.config_mut().set_lending_market_fee(high_fee_bps as u16).unwrap();
+                    fixed.sync_clock(t2).unwrap();
+
+                    // buggy ordering: raise the fee first, so it also covers the first window
+                    let mut retroactive = build();
+                    retroactive.config_mut().set_lending_market_fee(high_fee_bps as u16).unwrap();
+                    retroactive.sync_clock(t2).unwrap();
+
+                    let fixed_fees = total_fees(&fixed);
+                    let retroactive_fees = total_fees(&retroactive);
+                    prop_assert!(
+                        fixed_fees <= retroactive_fees,
+                        "sync-first collected {} but raising first collected {}",
+                        fixed_fees,
+                        retroactive_fees
+                    );
+                    // Confirm the gap is real and not a rounding artifact: the retroactive
+                    // ordering charges the higher fee over `elapsed_before` as well, so once
+                    // fees are large enough to survive rounding it strictly over-collects.
+                    if retroactive_fees > 1_000 {
+                        prop_assert!(
+                            retroactive_fees > fixed_fees,
+                            "expected retroactive over-collection, got {} vs {}",
+                            retroactive_fees,
+                            fixed_fees
+                        );
+                    }
+                }
+            }
+        }
+
         proptest! {
             #[test]
             fn borrow_always_respects_max_ltv(

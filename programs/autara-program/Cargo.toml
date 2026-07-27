@@ -26,3 +26,4 @@ hex-literal.workspace = true
 [dev-dependencies]
 
 apl-associated-token-account.workspace = true
+proptest.workspace = true

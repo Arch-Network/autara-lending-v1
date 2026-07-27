@@ -196,4 +196,92 @@ mod tests {
             LendingAccountValidationError::InvalidMarketVault
         );
     }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Only the market's own associated token account may serve as a vault. The
+            /// dangerous shape is an already-initialized token account at an arbitrary
+            /// address whose token-owner is the attacker: the processor skips ATA creation
+            /// for existing accounts, so without this check it would be adopted verbatim.
+            #[test]
+            fn any_non_canonical_supply_vault_is_rejected(
+                vault_key in prop::array::uniform32(0u8..=255u8),
+                token_owner in prop::array::uniform32(0u8..=255u8),
+            ) {
+                let mut set = CreateMarketSet::new();
+                let key = Pubkey::from(vault_key);
+                prop_assume!(
+                    key != get_associated_token_address(set.market.key, set.supply_mint.key)
+                );
+                set.supply_vault =
+                    create_token_account_at(key, &Pubkey::from(token_owner), set.supply_mint.key);
+                prop_assert_eq!(
+                    set.validate().unwrap_err(),
+                    LendingAccountValidationError::InvalidMarketVault
+                );
+            }
+
+            #[test]
+            fn any_non_canonical_collateral_vault_is_rejected(
+                vault_key in prop::array::uniform32(0u8..=255u8),
+                token_owner in prop::array::uniform32(0u8..=255u8),
+            ) {
+                let mut set = CreateMarketSet::new();
+                let key = Pubkey::from(vault_key);
+                prop_assume!(
+                    key != get_associated_token_address(set.market.key, set.collateral_mint.key)
+                );
+                set.collateral_vault = create_token_account_at(
+                    key,
+                    &Pubkey::from(token_owner),
+                    set.collateral_mint.key,
+                );
+                prop_assert_eq!(
+                    set.validate().unwrap_err(),
+                    LendingAccountValidationError::InvalidMarketVault
+                );
+            }
+
+            /// An ATA is only valid for the exact (owner, mint) pair it was derived from,
+            /// so another wallet's ATA — even a perfectly well-formed one — is rejected.
+            #[test]
+            fn ata_of_any_other_owner_is_rejected(
+                other_owner in prop::array::uniform32(0u8..=255u8),
+            ) {
+                let mut set = CreateMarketSet::new();
+                let other = Pubkey::from(other_owner);
+                prop_assume!(other != *set.market.key);
+                set.supply_vault = create_associated_token_account(&other, set.supply_mint.key);
+                prop_assert_eq!(
+                    set.validate().unwrap_err(),
+                    LendingAccountValidationError::InvalidMarketVault
+                );
+            }
+
+            /// The market's own ATA for some unrelated mint is still the wrong account.
+            #[test]
+            fn market_ata_for_any_other_mint_is_rejected(
+                other_mint in prop::array::uniform32(0u8..=255u8),
+            ) {
+                let mut set = CreateMarketSet::new();
+                let mint = Pubkey::from(other_mint);
+                prop_assume!(mint != *set.supply_mint.key);
+                set.supply_vault = create_associated_token_account(set.market.key, &mint);
+                prop_assert_eq!(
+                    set.validate().unwrap_err(),
+                    LendingAccountValidationError::InvalidMarketVault
+                );
+            }
+
+            /// Positive control: the canonical pair is always accepted, so the check cannot
+            /// be satisfied by simply rejecting everything.
+            #[test]
+            fn canonical_vaults_are_always_accepted(_seed in 0u8..=255u8) {
+                prop_assert!(CreateMarketSet::new().validate().is_ok());
+            }
+        }
+    }
 }
