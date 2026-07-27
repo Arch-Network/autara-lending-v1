@@ -202,6 +202,80 @@ pub fn create_associated_token_account(
     ))
 }
 
+/// A token account living at an arbitrary address (not the canonical ATA), owned by
+/// `token_owner`. Used to check that market vaults are pinned to the market's own ATA.
+pub fn create_token_account_at(
+    key: arch_program::pubkey::Pubkey,
+    token_owner: &arch_program::pubkey::Pubkey,
+    mint: &arch_program::pubkey::Pubkey,
+) -> AccountInfoWrapper {
+    let key = Box::leak(Box::new(key));
+    let lamports = Box::leak(Box::new(1_000_000u64));
+    let account_data = Box::leak(Box::new(vec![0; TokenAccount::LEN]));
+    TokenAccount::pack(
+        TokenAccount {
+            mint: *mint,
+            owner: *token_owner,
+            amount: 0,
+            state: apl_token::state::AccountState::Initialized,
+            ..Default::default()
+        },
+        &mut account_data.as_mut_slice(),
+    )
+    .expect("Failed to pack token account data");
+    AccountInfoWrapper(AccountInfo::new(
+        key,
+        lamports,
+        account_data,
+        Box::leak(Box::new(apl_token::id())),
+        Box::leak(Box::new(Default::default())),
+        false,
+        true,
+        false,
+    ))
+}
+
+pub fn create_mint(key: arch_program::pubkey::Pubkey, decimals: u8) -> AccountInfoWrapper {
+    let key = Box::leak(Box::new(key));
+    let lamports = Box::leak(Box::new(1_000_000u64));
+    let account_data = Box::leak(Box::new(vec![0; apl_token::state::Mint::LEN]));
+    apl_token::state::Mint::pack(
+        apl_token::state::Mint {
+            decimals,
+            is_initialized: true,
+            ..Default::default()
+        },
+        &mut account_data.as_mut_slice(),
+    )
+    .expect("Failed to pack mint data");
+    AccountInfoWrapper(AccountInfo::new(
+        key,
+        lamports,
+        account_data,
+        Box::leak(Box::new(apl_token::id())),
+        Box::leak(Box::new(Default::default())),
+        false,
+        false,
+        false,
+    ))
+}
+
+pub fn create_program_account(key: arch_program::pubkey::Pubkey) -> AccountInfoWrapper {
+    let key = Box::leak(Box::new(key));
+    let lamports = Box::leak(Box::new(1_000_000u64));
+    let account_data = Box::leak(Box::new(vec![0; 1]));
+    AccountInfoWrapper(AccountInfo::new(
+        key,
+        lamports,
+        account_data,
+        Box::leak(Box::new(Default::default())),
+        Box::leak(Box::new(Default::default())),
+        false,
+        false,
+        true,
+    ))
+}
+
 pub fn create_token_program() -> AccountInfoWrapper {
     let key = Box::leak(Box::new(apl_token::id()));
     let lamports = Box::leak(Box::new(1_000_000u64));

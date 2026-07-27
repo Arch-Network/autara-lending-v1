@@ -61,12 +61,16 @@ impl Market {
         &self.collateral_vault
     }
 
-    pub fn set_supply_oracle_config(&mut self, oracle_config: OracleConfig) {
+    pub fn set_supply_oracle_config(&mut self, oracle_config: OracleConfig) -> LendingResult {
+        oracle_config.validate().track_caller()?;
         self.supply_vault.set_oracle_config(oracle_config);
+        Ok(())
     }
 
-    pub fn set_collateral_oracle_config(&mut self, oracle_config: OracleConfig) {
+    pub fn set_collateral_oracle_config(&mut self, oracle_config: OracleConfig) -> LendingResult {
+        oracle_config.validate().track_caller()?;
         self.collateral_vault.set_oracle_config(oracle_config);
+        Ok(())
     }
 
     #[inline(always)]
@@ -356,10 +360,13 @@ impl Market {
             .track_caller()?;
         // because of rounding we need to adjust the liquidation result
         liquidation.adjust_for_max_repay(atoms_repaid);
-        borrow_position.liquidate(
-            shares_repaid,
-            liquidation.total_collateral_atoms_to_liquidate()?,
-        )?;
+        let collateral_seized = liquidation.total_collateral_atoms_to_liquidate()?;
+        borrow_position.liquidate(shares_repaid, collateral_seized)?;
+        // the seized collateral leaves the vault, so the vault total must follow the
+        // position; otherwise it drifts above the sum of positions on every liquidation
+        self.collateral_vault
+            .withdraw_collateral(collateral_seized)
+            .track_caller()?;
         let health_after = self
             .borrow_position_health(borrow_position, collateral_oracle, supply_oracle)
             .track_caller()?;
@@ -429,6 +436,10 @@ impl Market {
         let collateral_to_withdraw = borrow_position.collateral_deposited_atoms();
         borrow_position.repay_all();
         borrow_position.withdraw_collateral(collateral_to_withdraw)?;
+        // the collateral leaves the vault, so the vault total must follow the position
+        self.collateral_vault
+            .withdraw_collateral(collateral_to_withdraw)
+            .track_caller()?;
         Ok((debt, collateral_to_withdraw))
     }
 }
@@ -1363,6 +1374,141 @@ pub mod tests {
                 .unwrap(),
             LendingError::MaxLtvReached
         );
+    }
+
+    /// The collateral vault total must always equal the sum of the collateral still
+    /// held by positions: the tokens seized during a liquidation physically leave the
+    /// vault, so the accounting has to follow or it drifts up on every liquidation.
+    #[test]
+    pub fn liquidation_keeps_collateral_vault_in_sync_with_position() {
+        let mut market = create_btc_usdc_market();
+        let mut borrow_position = BorrowPosition::default();
+        let collateral_oracle = default_btc_oracle_rate();
+        let supply_oracle = default_usd_oracle_rate();
+        market
+            .deposit_collateral(&mut borrow_position, BTC(0.5))
+            .unwrap();
+        assert_eq!(market.collateral_vault().total_collateral_atoms(), BTC(0.5));
+        market
+            .borrow(
+                &mut borrow_position,
+                USDC(20_000.),
+                &supply_oracle,
+                &collateral_oracle,
+            )
+            .unwrap();
+        let supply_oracle =
+            OracleRate::new(IFixedPoint::from_num(2.3), IFixedPoint::from_num(0.001));
+        let result = market
+            .liquidate(
+                &mut borrow_position,
+                &collateral_oracle,
+                &supply_oracle,
+                u64::MAX,
+            )
+            .unwrap();
+        let seized = result
+            .liquidation_result_with_bonus
+            .total_collateral_atoms_to_liquidate()
+            .unwrap();
+        assert!(seized > 0, "test should actually seize collateral");
+        assert_eq!(
+            market.collateral_vault().total_collateral_atoms(),
+            BTC(0.5) - seized
+        );
+        assert_eq!(
+            market.collateral_vault().total_collateral_atoms(),
+            borrow_position.collateral_deposited_atoms()
+        );
+    }
+
+    #[test]
+    pub fn socialize_loss_keeps_collateral_vault_in_sync_with_position() {
+        let mut market = create_btc_usdc_market();
+        let mut borrow_position = BorrowPosition::default();
+        let collateral_oracle = default_btc_oracle_rate();
+        let supply_oracle = default_usd_oracle_rate();
+        market
+            .deposit_collateral(&mut borrow_position, BTC(0.5))
+            .unwrap();
+        market
+            .borrow(
+                &mut borrow_position,
+                USDC(20_000.),
+                &supply_oracle,
+                &collateral_oracle,
+            )
+            .unwrap();
+        let supply_oracle = OracleRate::new(IFixedPoint::from_num(3), IFixedPoint::from_num(0.001));
+        let (_debt, collateral_withdrawn) = market
+            .socialize_loss(&mut borrow_position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+        assert_eq!(collateral_withdrawn, BTC(0.5));
+        assert_eq!(borrow_position.collateral_deposited_atoms(), 0);
+        assert_eq!(market.collateral_vault().total_collateral_atoms(), 0);
+    }
+
+    /// A market that has been liquidated must still let the remaining collateral be
+    /// withdrawn: if the vault total had drifted, this would silently over-report, and
+    /// once fixed it must not under-report either (which would make withdrawal fail).
+    #[test]
+    pub fn can_withdraw_remaining_collateral_after_liquidation() {
+        let mut market = create_btc_usdc_market();
+        let mut borrow_position = BorrowPosition::default();
+        let collateral_oracle = default_btc_oracle_rate();
+        let supply_oracle = default_usd_oracle_rate();
+        market
+            .deposit_collateral(&mut borrow_position, BTC(0.5))
+            .unwrap();
+        market
+            .borrow(
+                &mut borrow_position,
+                USDC(20_000.),
+                &supply_oracle,
+                &collateral_oracle,
+            )
+            .unwrap();
+        let crashed_supply_oracle =
+            OracleRate::new(IFixedPoint::from_num(2.3), IFixedPoint::from_num(0.001));
+        market
+            .liquidate(
+                &mut borrow_position,
+                &collateral_oracle,
+                &crashed_supply_oracle,
+                u64::MAX,
+            )
+            .unwrap();
+        market.repay_all(&mut borrow_position).unwrap();
+        let remaining = borrow_position.collateral_deposited_atoms();
+        market
+            .withdraw_collateral(
+                &mut borrow_position,
+                remaining,
+                &collateral_oracle,
+                &supply_oracle,
+            )
+            .unwrap();
+        assert_eq!(market.collateral_vault().total_collateral_atoms(), 0);
+    }
+
+    #[test]
+    pub fn set_oracle_config_rejects_invalid_chaos_config() {
+        use crate::oracle::oracle_config::OracleConfig;
+        let mut market = create_btc_usdc_market();
+        // required_signatures == 0 would accept completely unsigned prices; it is
+        // rejected at vault initialization and must be rejected on update too.
+        let invalid = OracleConfig::new_chaos([3u8; 32], Pubkey::new_unique(), 0);
+        assert_eq!(
+            market.set_supply_oracle_config(invalid).unwrap_err(),
+            LendingError::InvalidOracleConfig
+        );
+        assert_eq!(
+            market.set_collateral_oracle_config(invalid).unwrap_err(),
+            LendingError::InvalidOracleConfig
+        );
+        let valid = OracleConfig::new_chaos([3u8; 32], Pubkey::new_unique(), 1);
+        market.set_supply_oracle_config(valid).unwrap();
+        market.set_collateral_oracle_config(valid).unwrap();
     }
 
     mod prop_tests {

@@ -346,6 +346,7 @@ dependencies = [
 name = "autara-program"
 version = "0.1.0"
 dependencies = [
+ "apl-associated-token-account",
  "apl-token",
  "arch_program",
  "autara-lib",
