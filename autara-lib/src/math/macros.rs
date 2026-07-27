@@ -144,6 +144,11 @@ macro_rules! define_fixed_point {
 
             /// If shift > 0, shifts left by shift as u32 bits.
             /// If shift < 0, shifts right by -shift as u32 bits.
+            ///
+            /// Returns None if a left shift would overflow: the underlying
+            /// `checked_shl` only rejects shift amounts >= the bit width and
+            /// silently discards overflowing high bits otherwise, so the shift
+            /// is verified by round-tripping back.
             pub fn checked_shift(&self, shift: i32) -> Option<Self> {
                 if shift < 0 {
                     return self
@@ -152,11 +157,11 @@ macro_rules! define_fixed_point {
                         .checked_shr(-shift as u32)
                         .map($name::from_fixed);
                 } else {
-                    return self
-                        .0
-                        .fixed()
-                        .checked_shl(shift as u32)
-                        .map($name::from_fixed);
+                    let shifted = self.0.fixed().checked_shl(shift as u32)?;
+                    if shifted.checked_shr(shift as u32) != Some(self.0.fixed()) {
+                        return None;
+                    }
+                    return Some($name::from_fixed(shifted));
                 };
             }
         }

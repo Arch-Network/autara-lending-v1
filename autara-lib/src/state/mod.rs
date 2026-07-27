@@ -118,7 +118,7 @@ mod tests {
 
         // Simulate a long period with no successful sync, then attempt to sync again at ~2y later.
         // With utilisation = 100%, err = 1 and linear_adaptation ≈ 50 * years_elapsed.
-        // After ~1.1y, linear_adaptation > 55.26 and `checked_exp()` errors.
+        // After ~1.1y, linear_adaptation > 54.75 and `checked_exp()` errors.
         let brick_timestamp = last_update_before + (2 * SECONDS_PER_YEAR) as i64;
         assert_eq!(
             market.sync_clock(brick_timestamp).unwrap_err(),
