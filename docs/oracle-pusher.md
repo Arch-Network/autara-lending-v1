@@ -32,6 +32,7 @@ Point a service at this image and set env from the matching file:
 | `FEEDS` | BTC,USDC (add ETH if used) | BTC,USDC |
 | `SIGNER_KEY_B64` | optional (faucet funds a throwaway key) | **required** — pre-funded key, no faucet |
 | `SLACK_WEBHOOK_URL` | optional | recommended — `#arch-prime-alerts` incoming webhook |
+| `EXPLORER_API_URL` | optional (defaults to `https://explorer.arch.network`) | optional (same default) |
 
 `NETWORK=mainnet` is translated to `--network bitcoin` for `autara-pyth`
 (it parses the raw `bitcoin::Network`).
@@ -45,6 +46,13 @@ Point a service at this image and set env from the matching file:
   set, the pusher sends transition alerts at 172,800,000 lamports (48-hour
   warning) and 21,600,000 lamports (6-hour critical), plus a recovery message.
   Failed Slack deliveries retry after five minutes.
+- **Balance is read from the explorer API**, not the push RPC: a single RPC node
+  can serve stale account state, which flapped the alerts between critical and
+  recovered while the signer was actually funded. Reads go to
+  `EXPLORER_API_URL` (default `https://explorer.arch.network`) at
+  `/api/v1/{mainnet,testnet}/accounts/<pubkey-hex>`. Transactions still go to
+  `ARCH_RPC_URL` — the explorer API is read-only. Local networks the explorer
+  does not index fall back to RPC.
 - **Feeds push atomically.** All feeds go in one transaction; a malformed feed
   drops the whole push. Keep the mainnet feed list to what the markets need.
 - If you also run `ROLE=server` on mainnet, set `DISABLE_PRICE_PUSHER=1` there so
