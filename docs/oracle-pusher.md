@@ -31,6 +31,7 @@ Point a service at this image and set env from the matching file:
 | `ORACLE_PROGRAM_ID` | `eee682c2…` (deployed stage oracle) | `a2b2fe9e…` (deploy artifact `oracle_id`) |
 | `FEEDS` | BTC,USDC (add ETH if used) | BTC,USDC |
 | `SIGNER_KEY_B64` | optional (faucet funds a throwaway key) | **required** — pre-funded key, no faucet |
+| `SLACK_WEBHOOK_URL` | optional | recommended — `#arch-prime-alerts` incoming webhook |
 
 `NETWORK=mainnet` is translated to `--network bitcoin` for `autara-pyth`
 (it parses the raw `bitcoin::Network`).
@@ -40,7 +41,10 @@ Point a service at this image and set env from the matching file:
 - **Fund + monitor the signer.** There is no faucet and no airdrop loop on the
   standalone pusher. If the signer runs dry, pushes stop and markets fail with
   `0x1b70`. Any key works (the oracle program only needs a signature) — use a
-  dedicated low-value key and alert on its balance.
+  dedicated low-value key and alert on its balance. When `SLACK_WEBHOOK_URL` is
+  set, the pusher sends transition alerts at 172,800,000 lamports (48-hour
+  warning) and 21,600,000 lamports (6-hour critical), plus a recovery message.
+  Failed Slack deliveries retry after five minutes.
 - **Feeds push atomically.** All feeds go in one transaction; a malformed feed
   drops the whole push. Keep the mainnet feed list to what the markets need.
 - If you also run `ROLE=server` on mainnet, set `DISABLE_PRICE_PUSHER=1` there so
@@ -76,6 +80,9 @@ Railway service settings (testnet + mainnet pusher):
 | Healthcheck timeout | ≥ 30s (allow first push) |
 | Public networking | off (private scrape only) |
 | Env | from `autara.pusher.{testnet,mainnet}.env` + `SIGNER_KEY_B64` |
+
+For the mainnet service, also set `SLACK_WEBHOOK_URL` to the incoming webhook
+secret for `#arch-prime-alerts`. The webhook URL must never be committed.
 
 After deploy: `curl -fsS http://<private-host>/health` and scrape `/metrics`.
 Alert rules live in `prometheus-alerts.yml` (`AutaraPusherNotPushing`,
