@@ -510,9 +510,8 @@ impl Market {
             )?
             .1
         };
-        let collateral_atoms_returned = swept_collateral_atoms.safe_sub(
-            liquidation.total_collateral_atoms_to_liquidate()?,
-        )?;
+        let collateral_atoms_returned =
+            swept_collateral_atoms.safe_sub(liquidation.total_collateral_atoms_to_liquidate()?)?;
         if collateral_atoms_returned > max_collateral_atoms_to_return {
             return Err(LendingError::CapitalSweepDidNotMeetRequirements.into());
         }
@@ -524,9 +523,8 @@ impl Market {
             )
             .track_caller()?;
         liquidation.adjust_for_max_repay(atoms_repaid);
-        let adjusted_collateral_atoms_returned = swept_collateral_atoms.safe_sub(
-            liquidation.total_collateral_atoms_to_liquidate()?,
-        )?;
+        let adjusted_collateral_atoms_returned =
+            swept_collateral_atoms.safe_sub(liquidation.total_collateral_atoms_to_liquidate()?)?;
         if adjusted_collateral_atoms_returned > max_collateral_atoms_to_return {
             return Err(LendingError::CapitalSweepDidNotMeetRequirements.into());
         }
@@ -1579,11 +1577,7 @@ pub mod tests {
             .unwrap();
         assert_eq!(
             healthy_market
-                .begin_capital_sweep(
-                    &mut healthy_position,
-                    &collateral_oracle,
-                    &supply_oracle,
-                )
+                .begin_capital_sweep(&mut healthy_position, &collateral_oracle, &supply_oracle,)
                 .unwrap_err(),
             LendingError::PositionIsHealthy
         );
@@ -1624,9 +1618,7 @@ pub mod tests {
             .unwrap();
 
         assert_eq!(
-            result
-                .liquidation_result_with_bonus
-                .borrowed_atoms_to_repay,
+            result.liquidation_result_with_bonus.borrowed_atoms_to_repay,
             USDC(100.)
         );
         let kept = result
@@ -1644,9 +1636,7 @@ pub mod tests {
             result.collateral_atoms_returned
         );
         assert!(result.health_after_settlement.ltv < result.health_before_settlement.ltv);
-        assert!(
-            result.health_after_settlement.ltv > market.config().ltv_config().unhealthy_ltv
-        );
+        assert!(result.health_after_settlement.ltv > market.config().ltv_config().unhealthy_ltv);
     }
 
     #[test]
@@ -1655,11 +1645,7 @@ pub mod tests {
             unhealthy_capital_sweep_fixture();
         let swept = position.collateral_deposited_atoms();
         market
-            .begin_capital_sweep(
-                &mut position,
-                &collateral_oracle,
-                &unhealthy_supply_oracle,
-            )
+            .begin_capital_sweep(&mut position, &collateral_oracle, &unhealthy_supply_oracle)
             .unwrap();
         let healthy_supply_oracle = default_usd_oracle_rate();
 
@@ -1674,16 +1660,12 @@ pub mod tests {
             .unwrap();
 
         assert_eq!(
-            result
-                .liquidation_result_with_bonus
-                .borrowed_atoms_to_repay,
+            result.liquidation_result_with_bonus.borrowed_atoms_to_repay,
             0
         );
         assert_eq!(result.collateral_atoms_returned, swept);
         assert_eq!(position.collateral_deposited_atoms(), swept);
-        assert!(
-            result.health_after_settlement.ltv < market.config().ltv_config().unhealthy_ltv
-        );
+        assert!(result.health_after_settlement.ltv < market.config().ltv_config().unhealthy_ltv);
     }
 
     #[test]
@@ -1691,11 +1673,7 @@ pub mod tests {
         let (mut market, mut position, collateral_oracle, unhealthy_supply_oracle) =
             unhealthy_capital_sweep_fixture();
         market
-            .begin_capital_sweep(
-                &mut position,
-                &collateral_oracle,
-                &unhealthy_supply_oracle,
-            )
+            .begin_capital_sweep(&mut position, &collateral_oracle, &unhealthy_supply_oracle)
             .unwrap();
         let insolvent_supply_oracle =
             OracleRate::new(IFixedPoint::from_num(3), IFixedPoint::from_num(0.001));
@@ -1744,8 +1722,14 @@ pub mod tests {
             .unwrap_err();
 
         assert_eq!(error, LendingError::CapitalSweepDidNotMeetRequirements);
-        assert_eq!(position.swept_collateral_atoms(), position_before.swept_collateral_atoms());
-        assert_eq!(position.borrowed_shares(), position_before.borrowed_shares());
+        assert_eq!(
+            position.swept_collateral_atoms(),
+            position_before.swept_collateral_atoms()
+        );
+        assert_eq!(
+            position.borrowed_shares(),
+            position_before.borrowed_shares()
+        );
         assert_eq!(
             market.collateral_vault().total_collateral_atoms(),
             collateral_total_before

@@ -84,7 +84,9 @@ mod tests {
     use super::*;
     use crate::{error::LendingAccountValidationError, ixs::test_utils::AutaraAccounts};
 
-    fn settle_accounts(accounts: &AutaraAccounts) -> Vec<arch_program::account::AccountInfo<'static>> {
+    fn settle_accounts(
+        accounts: &AutaraAccounts,
+    ) -> Vec<arch_program::account::AccountInfo<'static>> {
         vec![
             accounts.market.clone(),
             accounts.borrow_position.clone(),
