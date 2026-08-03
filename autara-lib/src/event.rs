@@ -28,6 +28,8 @@ pub enum AurataEventTag {
     Donation,
     CapitalSweepStarted,
     CapitalSweepSettled,
+    LiquidatorWhitelistEntryAdded,
+    LiquidatorWhitelistEntryRemoved,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -162,6 +164,19 @@ pub struct CapitalSweepSettledEvent {
     pub collateral_returned: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(
+    feature = "client",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
+pub struct LiquidatorWhitelistUpdatedEvent {
+    pub market: Pubkey,
+    pub curator: Pubkey,
+    pub liquidator: Pubkey,
+    pub active_whitelisted_liquidators: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
     feature = "client",
@@ -184,6 +199,8 @@ pub enum AutaraEvent {
     DonateSupply(DonateSupplyEvent),
     CapitalSweepStarted(CapitalSweepStartedEvent),
     CapitalSweepSettled(CapitalSweepSettledEvent),
+    LiquidatorWhitelistEntryAdded(LiquidatorWhitelistUpdatedEvent),
+    LiquidatorWhitelistEntryRemoved(LiquidatorWhitelistUpdatedEvent),
 }
 
 impl AutaraEvent {
@@ -311,6 +328,14 @@ impl BorshSerialize for AutaraEvent {
                 AurataEventTag::CapitalSweepSettled.serialize(writer)?;
                 event.serialize(writer)
             }
+            AutaraEvent::LiquidatorWhitelistEntryAdded(event) => {
+                AurataEventTag::LiquidatorWhitelistEntryAdded.serialize(writer)?;
+                event.serialize(writer)
+            }
+            AutaraEvent::LiquidatorWhitelistEntryRemoved(event) => {
+                AurataEventTag::LiquidatorWhitelistEntryRemoved.serialize(writer)?;
+                event.serialize(writer)
+            }
         }
     }
 }
@@ -356,6 +381,12 @@ impl BorshDeserialize for AutaraEvent {
             AurataEventTag::CapitalSweepSettled => Ok(AutaraEvent::CapitalSweepSettled(
                 <_>::deserialize_reader(reader)?,
             )),
+            AurataEventTag::LiquidatorWhitelistEntryAdded => Ok(
+                AutaraEvent::LiquidatorWhitelistEntryAdded(<_>::deserialize_reader(reader)?),
+            ),
+            AurataEventTag::LiquidatorWhitelistEntryRemoved => Ok(
+                AutaraEvent::LiquidatorWhitelistEntryRemoved(<_>::deserialize_reader(reader)?),
+            ),
         }
     }
 }
@@ -393,6 +424,26 @@ mod tests {
             }),
         ];
         for (expected_tag, event) in [13u8, 14].into_iter().zip(events) {
+            let encoded = borsh::to_vec(&event).unwrap();
+            assert_eq!(encoded[0], expected_tag);
+            assert_eq!(AutaraEvent::try_from_slice(&encoded).unwrap(), event);
+        }
+    }
+
+    #[test]
+    fn liquidator_whitelist_events_are_appended_and_round_trip() {
+        let event = LiquidatorWhitelistUpdatedEvent {
+            market: Pubkey::new_unique(),
+            curator: Pubkey::new_unique(),
+            liquidator: Pubkey::new_unique(),
+            active_whitelisted_liquidators: 2,
+        };
+        let events = [
+            AutaraEvent::LiquidatorWhitelistEntryAdded(event),
+            AutaraEvent::LiquidatorWhitelistEntryRemoved(event),
+        ];
+
+        for (expected_tag, event) in [15u8, 16].into_iter().zip(events) {
             let encoded = borsh::to_vec(&event).unwrap();
             assert_eq!(encoded[0], expected_tag);
             assert_eq!(AutaraEvent::try_from_slice(&encoded).unwrap(), event);
