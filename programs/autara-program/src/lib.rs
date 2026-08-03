@@ -9,7 +9,8 @@ use crate::{
         redeem_protocol_fees::RedeemProtocolFeesAccounts, *,
     },
     processor::{
-        borrow_apl::process_borrow_apl, borrow_deposit_apl::process_borrow_deposit_apl,
+        begin_capital_sweep::process_begin_capital_sweep, borrow_apl::process_borrow_apl,
+        borrow_deposit_apl::process_borrow_deposit_apl,
         create_borrow_position::process_create_borrow_position,
         create_global_config::process_create_global_config, create_market::process_create_market,
         create_supply_position::process_create_supply_position,
@@ -17,6 +18,7 @@ use crate::{
         donate_supply::process_donate_supply, liquidate::process_liquidate,
         redeem_curator_fees::process_redeem_curator_fees,
         redeem_protocol_fees::process_redeem_protocol_fees, repay_apl::process_repay_apl,
+        settle_capital_sweep::process_settle_capital_sweep,
         socialize_loss::process_socialize_loss, supply_apl::process_supply_apl,
         update_config::process_update_config, update_global_config::process_update_global_config,
         withdraw_apl_collateral::process_withdraw_apl_collateral,
@@ -207,6 +209,16 @@ pub fn autara_process_instruction<'a>(
             msg!("Processing DonateSupply instruction");
             let donate_supply_accounts = DonateSupplyAccounts::from_accounts(&mut accounts_iter)?;
             process_donate_supply(&donate_supply_accounts, data, accounts, program_id, &clock)
+        }
+        AurataInstruction::BeginCapitalSweep(data) => {
+            msg!("Processing BeginCapitalSweep instruction");
+            let sweep_accounts = BeginCapitalSweepAccounts::from_accounts(&mut accounts_iter)?;
+            process_begin_capital_sweep(&sweep_accounts, data, accounts, program_id, &clock)
+        }
+        AurataInstruction::SettleCapitalSweep(data) => {
+            msg!("Processing SettleCapitalSweep instruction");
+            let settle_accounts = SettleCapitalSweepAccounts::from_accounts(&mut accounts_iter)?;
+            process_settle_capital_sweep(&settle_accounts, data, accounts, program_id, &clock)
         }
         AurataInstruction::Log => {
             let _check_accounts = LogAccounts::from_accounts(&mut accounts_iter)?;
