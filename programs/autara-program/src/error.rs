@@ -92,6 +92,8 @@ pub enum LendingAccountValidationError {
     #[error("Invalid protocol authority")]
     InvalidProtocolAuthority,
     InvalidLiquidatorWhitelistEntry,
+    MissingLiquidatorWhitelistEntry,
+    LiquidatorNotWhitelisted,
 }
 
 pub const ACCOUNT_VALIDATION_ERROR_OFFSET: u32 = 6000;

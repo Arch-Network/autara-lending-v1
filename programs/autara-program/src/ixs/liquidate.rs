@@ -1,11 +1,17 @@
 use arch_program::account::{next_account_info, AccountInfo};
-use autara_lib::state::{borrow_position::BorrowPosition, market::Market};
+use autara_lib::{
+    pda::find_liquidator_whitelist_entry_pda,
+    state::{
+        borrow_position::BorrowPosition, liquidator_whitelist::LiquidatorWhitelistEntry,
+        market::Market,
+    },
+};
 use autara_program_lib::accounts::{
     packed::PackedOwnedAccount,
     program::Program,
     signer::Signer,
     token::{AplTokenProgram, BoxedTokenAccount},
-    zero_copy::ZeroCopyOwnedAccountMut,
+    zero_copy::{ZeroCopyOwnedAccount, ZeroCopyOwnedAccountMut},
 };
 
 use crate::{
@@ -24,6 +30,8 @@ pub struct LiquidateAccounts<'a, 'b> {
     pub apl_token_program: Program<'a, 'b, AplTokenProgram>,
     pub supply_oracle: &'b AccountInfo<'a>,
     pub collateral_oracle: &'b AccountInfo<'a>,
+    pub liquidator_whitelist_entry:
+        Option<ZeroCopyOwnedAccount<'a, 'b, AutaraAccount<LiquidatorWhitelistEntry>>>,
 }
 
 impl<'a, 'b> LiquidateAccounts<'a, 'b> {
@@ -34,7 +42,7 @@ impl<'a, 'b> LiquidateAccounts<'a, 'b> {
     where
         'a: 'b,
     {
-        let this = Self {
+        let mut this = Self {
             market: next_account_info(accounts)?.try_into()?,
             borrow_position: next_account_info(accounts)?.try_into()?,
             liquidator: next_account_info(accounts)?.try_into()?,
@@ -45,7 +53,26 @@ impl<'a, 'b> LiquidateAccounts<'a, 'b> {
             apl_token_program: next_account_info(accounts)?.try_into()?,
             supply_oracle: next_account_info(accounts)?,
             collateral_oracle: next_account_info(accounts)?,
+            liquidator_whitelist_entry: None,
         };
+        if !this
+            .market
+            .load_ref()
+            .config()
+            .liquidations_are_permissionless()
+        {
+            let entry_account = next_account_info(accounts)
+                .map_err(|_| LendingAccountValidationError::MissingLiquidatorWhitelistEntry)?;
+            if entry_account.key == &crate::id() {
+                return Err(LendingAccountValidationError::MissingLiquidatorWhitelistEntry.into());
+            }
+            this.liquidator_whitelist_entry = Some(
+                ZeroCopyOwnedAccount::<AutaraAccount<LiquidatorWhitelistEntry>>::try_from(
+                    entry_account,
+                )
+                .map_err(|_| LendingAccountValidationError::LiquidatorNotWhitelisted)?,
+            );
+        }
         this.validate()?;
         Ok(this)
     }
@@ -68,16 +95,163 @@ impl<'a, 'b> LiquidateAccounts<'a, 'b> {
         if self.market_supply_vault.key() != market.supply_vault().vault() {
             return Err(LendingAccountValidationError::InvalidMarketVault.into());
         }
+        if !market.config().liquidations_are_permissionless() {
+            let entry = self
+                .liquidator_whitelist_entry
+                .as_ref()
+                .ok_or(LendingAccountValidationError::MissingLiquidatorWhitelistEntry)?;
+            let (expected_entry, _) = find_liquidator_whitelist_entry_pda(
+                &crate::id(),
+                self.market.key(),
+                self.liquidator.key,
+            );
+            let entry_ref = entry.load_ref();
+            if entry.key() != &expected_entry
+                || entry_ref.market() != self.market.key()
+                || entry_ref.liquidator() != self.liquidator.key
+                || !entry_ref.is_active()
+            {
+                return Err(LendingAccountValidationError::LiquidatorNotWhitelisted.into());
+            }
+        }
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use arch_program::pubkey::Pubkey;
+    use autara_lib::{
+        pda::find_liquidator_whitelist_entry_pda,
+        state::{liquidator_whitelist::LiquidatorWhitelistEntry, market::Market},
+    };
     use autara_program_lib::accounts::AccountValidationError;
 
     use super::*;
-    use crate::ixs::test_utils::AutaraAccounts;
+    use crate::{
+        error::LendingAccountValidationError,
+        ixs::test_utils::{create_autara_account, AutaraAccounts},
+    };
+
+    fn restrict_market(account_set: &AutaraAccounts) {
+        let mut data = account_set.market.try_borrow_mut_data().unwrap();
+        let market = bytemuck::from_bytes_mut::<Market>(&mut data);
+        market
+            .config_mut()
+            .increment_active_whitelisted_liquidators()
+            .unwrap();
+    }
+
+    fn whitelist_entry(
+        market: Pubkey,
+        liquidator: Pubkey,
+        active: bool,
+    ) -> crate::ixs::test_utils::AccountInfoWrapper {
+        let (entry_key, bump) =
+            find_liquidator_whitelist_entry_pda(&crate::id(), &market, &liquidator);
+        let mut entry = LiquidatorWhitelistEntry::default();
+        entry.initialize(market, liquidator, bump).unwrap();
+        if !active {
+            entry.deactivate().unwrap();
+        }
+        create_autara_account(entry_key, entry)
+    }
+
+    fn base_accounts(account_set: &AutaraAccounts) -> Vec<AccountInfo<'static>> {
+        vec![
+            account_set.market.clone(),
+            account_set.borrow_position.clone(),
+            account_set.user.clone(),
+            account_set.user_supply_ata.clone(),
+            account_set.user_collateral_ata.clone(),
+            account_set.market_supply_vault.clone(),
+            account_set.market_collateral_vault.clone(),
+            account_set.apl_token_program.clone(),
+            account_set.oracle.clone(),
+            account_set.oracle.clone(),
+        ]
+    }
+
+    #[test]
+    fn restricted_market_accepts_active_entry_for_liquidator_signer() {
+        let account_set = AutaraAccounts::new();
+        restrict_market(&account_set);
+        let entry = whitelist_entry(*account_set.market.key, *account_set.user.key, true);
+        let mut accounts = base_accounts(&account_set);
+        accounts.push(entry.clone());
+
+        LiquidateAccounts::from_accounts(&mut accounts.iter()).unwrap();
+    }
+
+    #[test]
+    fn restricted_market_rejects_missing_whitelist_entry() {
+        let account_set = AutaraAccounts::new();
+        restrict_market(&account_set);
+        let accounts = base_accounts(&account_set);
+
+        let result = LiquidateAccounts::from_accounts(&mut accounts.iter());
+        let Err(error) = result else {
+            panic!("expected missing whitelist entry");
+        };
+        assert_eq!(
+            error,
+            LendingAccountValidationError::MissingLiquidatorWhitelistEntry
+        );
+    }
+
+    #[test]
+    fn restricted_market_rejects_inactive_whitelist_entry() {
+        let account_set = AutaraAccounts::new();
+        restrict_market(&account_set);
+        let entry = whitelist_entry(*account_set.market.key, *account_set.user.key, false);
+        let mut accounts = base_accounts(&account_set);
+        accounts.push(entry.clone());
+
+        let result = LiquidateAccounts::from_accounts(&mut accounts.iter());
+        let Err(error) = result else {
+            panic!("expected inactive whitelist entry to fail");
+        };
+        assert_eq!(
+            error,
+            LendingAccountValidationError::LiquidatorNotWhitelisted
+        );
+    }
+
+    #[test]
+    fn restricted_market_rejects_entry_for_another_liquidator() {
+        let account_set = AutaraAccounts::new();
+        restrict_market(&account_set);
+        let entry = whitelist_entry(*account_set.market.key, Pubkey::new_unique(), true);
+        let mut accounts = base_accounts(&account_set);
+        accounts.push(entry.clone());
+
+        let result = LiquidateAccounts::from_accounts(&mut accounts.iter());
+        let Err(error) = result else {
+            panic!("expected another liquidator's entry to fail");
+        };
+        assert_eq!(
+            error,
+            LendingAccountValidationError::LiquidatorNotWhitelisted
+        );
+    }
+
+    #[test]
+    fn restricted_market_rejects_entry_for_another_market() {
+        let account_set = AutaraAccounts::new();
+        restrict_market(&account_set);
+        let entry = whitelist_entry(Pubkey::new_unique(), *account_set.user.key, true);
+        let mut accounts = base_accounts(&account_set);
+        accounts.push(entry.clone());
+
+        let result = LiquidateAccounts::from_accounts(&mut accounts.iter());
+        let Err(error) = result else {
+            panic!("expected another market's entry to fail");
+        };
+        assert_eq!(
+            error,
+            LendingAccountValidationError::LiquidatorNotWhitelisted
+        );
+    }
 
     #[test]
     pub fn validate_correct_accounts() {

@@ -287,6 +287,7 @@ async fn cant_liquidate_twice_with_callback_unhealthy_position() {
         u64::MAX,
         0,
         None,
+        None,
     );
     let err = fixture
         .user_client()
