@@ -91,6 +91,7 @@ pub enum LendingAccountValidationError {
     InvalidMintForTokenAccount,
     #[error("Invalid protocol authority")]
     InvalidProtocolAuthority,
+    InvalidLiquidatorWhitelistEntry,
 }
 
 pub const ACCOUNT_VALIDATION_ERROR_OFFSET: u32 = 6000;

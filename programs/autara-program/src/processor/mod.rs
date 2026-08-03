@@ -1,3 +1,4 @@
+pub mod add_whitelisted_liquidator;
 pub mod begin_capital_sweep;
 pub mod borrow_apl;
 pub mod borrow_deposit_apl;
@@ -10,6 +11,7 @@ pub mod donate_supply;
 pub mod liquidate;
 pub mod redeem_curator_fees;
 pub mod redeem_protocol_fees;
+pub mod remove_whitelisted_liquidator;
 pub mod repay_apl;
 pub mod settle_capital_sweep;
 pub mod socialize_loss;
