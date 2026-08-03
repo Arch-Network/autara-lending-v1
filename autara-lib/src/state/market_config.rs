@@ -286,6 +286,27 @@ pub mod tests {
     }
 
     #[test]
+    fn whitelist_count_rejects_overflow_and_underflow_without_mutating() {
+        let mut config = test_config();
+        assert_eq!(
+            config
+                .decrement_active_whitelisted_liquidators()
+                .unwrap_err(),
+            LendingError::SubtractionOverflow
+        );
+        assert_eq!(config.active_whitelisted_liquidators(), 0);
+
+        config.active_whitelisted_liquidators = u64::MAX;
+        assert_eq!(
+            config
+                .increment_active_whitelisted_liquidators()
+                .unwrap_err(),
+            LendingError::AdditionOverflow
+        );
+        assert_eq!(config.active_whitelisted_liquidators(), u64::MAX);
+    }
+
+    #[test]
     fn test_initialization() {
         let mut market_config = MarketConfig::default();
         let curator = Pubkey::new_unique();
