@@ -97,6 +97,8 @@ pub enum LendingError {
     CannotSocializeDebtForHealthyPosition,
     UnsupportedMintDecimals,
     InvalidOracleConfig,
+    CapitalSweepPending,
+    NoCapitalSweepPending,
 }
 
 impl LendingError {
