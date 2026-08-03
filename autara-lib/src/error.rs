@@ -143,6 +143,8 @@ pub enum LendingError {
     CapitalSweepPositionInsolvent,
     #[error("Capital sweep did not meet market requirements")]
     CapitalSweepDidNotMeetRequirements,
+    LiquidatorAlreadyWhitelisted,
+    LiquidatorNotWhitelisted,
 }
 
 impl LendingError {

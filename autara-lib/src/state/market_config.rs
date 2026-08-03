@@ -40,7 +40,9 @@ pub struct MarketConfig {
     max_utilisation_rate: IFixedPoint,
     /// Maximum atoms which can be supplied to the market
     max_supply_atoms: u64,
-    pad_2: Padding<80>,
+    /// Number of active liquidator whitelist entries. Zero keeps liquidation permissionless.
+    active_whitelisted_liquidators: u64,
+    pad_2: Padding<72>,
 }
 
 pub const MAX_LTV_WITH_LIQUIDATION_BONUS: IFixedPoint = IFixedPoint::lit("0.99");
@@ -91,6 +93,26 @@ impl MarketConfig {
     #[inline(always)]
     pub fn max_supply_atoms(&self) -> u64 {
         self.max_supply_atoms
+    }
+
+    #[inline(always)]
+    pub fn active_whitelisted_liquidators(&self) -> u64 {
+        self.active_whitelisted_liquidators
+    }
+
+    #[inline(always)]
+    pub fn liquidations_are_permissionless(&self) -> bool {
+        self.active_whitelisted_liquidators == 0
+    }
+
+    pub fn increment_active_whitelisted_liquidators(&mut self) -> LendingResult {
+        self.active_whitelisted_liquidators = self.active_whitelisted_liquidators.safe_add(1)?;
+        Ok(())
+    }
+
+    pub fn decrement_active_whitelisted_liquidators(&mut self) -> LendingResult {
+        self.active_whitelisted_liquidators = self.active_whitelisted_liquidators.safe_sub(1)?;
+        Ok(())
     }
 
     #[inline(always)]
@@ -244,8 +266,23 @@ pub mod tests {
             lending_market_fee_in_bps: percent_to_bps(10) as u16,
             protocol_fee_share_in_bps: percent_to_bps(50) as u16,
             max_supply_atoms: u64::MAX,
+            active_whitelisted_liquidators: 0,
             pad_2: Padding::default(),
         }
+    }
+
+    #[test]
+    fn whitelist_count_controls_permissionless_mode() {
+        let mut config = test_config();
+        assert!(config.liquidations_are_permissionless());
+
+        config.increment_active_whitelisted_liquidators().unwrap();
+        assert_eq!(config.active_whitelisted_liquidators(), 1);
+        assert!(!config.liquidations_are_permissionless());
+
+        config.decrement_active_whitelisted_liquidators().unwrap();
+        assert_eq!(config.active_whitelisted_liquidators(), 0);
+        assert!(config.liquidations_are_permissionless());
     }
 
     #[test]
