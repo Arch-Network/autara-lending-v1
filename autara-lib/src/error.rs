@@ -99,6 +99,8 @@ pub enum LendingError {
     InvalidOracleConfig,
     CapitalSweepPending,
     NoCapitalSweepPending,
+    CapitalSweepPositionInsolvent,
+    CapitalSweepDidNotMeetRequirements,
 }
 
 impl LendingError {

@@ -190,6 +190,15 @@ pub struct LiquidationResultWithCtx {
     pub health_after_liquidation: BorrowPositionHealth,
 }
 
+#[repr(C)]
+#[derive(Default, Debug, Clone, Copy)]
+pub struct CapitalSweepSettlementResult {
+    pub liquidation_result_with_bonus: LiquidationResultWithBonus,
+    pub health_before_settlement: BorrowPositionHealth,
+    pub health_after_settlement: BorrowPositionHealth,
+    pub collateral_atoms_returned: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
