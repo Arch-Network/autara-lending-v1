@@ -83,6 +83,8 @@
 - Modify: `programs/autara-program/src/ixs/mod.rs`
 - Modify: `programs/autara-program/src/processor/mod.rs`
 - Modify: `programs/autara-program/src/lib.rs`
+- Modify: `autara-client/src/client/tx_builder.rs`
+- Modify: `autara-client/src/client/client_with_signer.rs`
 - Test: new account-validation modules
 
 **Interfaces:**
@@ -94,6 +96,7 @@
 - [ ] Implement begin accounts and processor: sync clock, call market begin, emit event, transfer all swept collateral market-to-curator with market PDA signing.
 - [ ] Implement settle accounts and processor: sync clock, call market settle, enforce bound through the library, emit event, transfer exact supply and returned collateral curator-to-market.
 - [ ] Append dispatch wiring and module exports.
+- [ ] Add transaction-builder and signed-client methods for curator begin and settlement calls.
 - [ ] Run focused program tests and confirm pass.
 
 ### Task 5: Regression verification
