@@ -17,6 +17,7 @@ use autara_lib::{
 };
 use autara_lib::{
     ixs::{UpdateConfigInstruction, UpdateGlobalConfigInstruction},
+    pda::find_liquidator_whitelist_entry_pda,
     token::get_associated_token_address,
 };
 
@@ -345,6 +346,42 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .await
     }
 
+    pub async fn add_whitelisted_liquidator(
+        &self,
+        market_key: &Pubkey,
+        liquidator: Pubkey,
+    ) -> anyhow::Result<(Pubkey, TransactionToSign)> {
+        let (entry, instruction) = autara_lib::ixs::add_whitelisted_liquidator_ix(
+            self.autara_program_id,
+            *market_key,
+            self.authority_key,
+            liquidator,
+        );
+        Ok((
+            entry,
+            self.build_transaction_digest_hash_to_sign(vec![instruction])
+                .await?,
+        ))
+    }
+
+    pub async fn remove_whitelisted_liquidator(
+        &self,
+        market_key: &Pubkey,
+        liquidator: Pubkey,
+    ) -> anyhow::Result<(Pubkey, TransactionToSign)> {
+        let (entry, instruction) = autara_lib::ixs::remove_whitelisted_liquidator_ix(
+            self.autara_program_id,
+            *market_key,
+            self.authority_key,
+            liquidator,
+        );
+        Ok((
+            entry,
+            self.build_transaction_digest_hash_to_sign(vec![instruction])
+                .await?,
+        ))
+    }
+
     pub async fn liquidate(
         &self,
         market_key: &Pubkey,
@@ -361,6 +398,15 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
         ixs.push(self.ensure_ata_ix(&self.authority_key, market.market().supply_vault().mint()));
         ixs.push(self.ensure_ata_ix(&self.authority_key, market.market().collateral_vault().mint()));
         let (supply_oracle_id, collateral_oracle_id) = market.market().get_oracle_keys();
+        let liquidator_whitelist_entry =
+            (!market.market().config().liquidations_are_permissionless()).then(|| {
+                find_liquidator_whitelist_entry_pda(
+                    &self.autara_program_id,
+                    market_key,
+                    &self.authority_key,
+                )
+                .0
+            });
         let liquidate_ix = autara_lib::ixs::liquidate_ix(
             self.autara_program_id,
             *market_key,
@@ -380,6 +426,7 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             collateral_oracle_id,
             max_borrowed_atoms_to_repay.unwrap_or(u64::MAX),
             min_collateral_atoms_to_receive.unwrap_or(0),
+            liquidator_whitelist_entry,
             ix_callback,
         );
         ixs.push(liquidate_ix);

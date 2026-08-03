@@ -266,6 +266,38 @@ impl<T: AutaraReadClient> AutaraFullClientWithSigner<T> {
         Ok(events)
     }
 
+    pub async fn add_whitelisted_liquidator(
+        &self,
+        market: &Pubkey,
+        liquidator: Pubkey,
+    ) -> Result<AutaraEvents, AutaraClientError> {
+        let (_, tx) = self
+            .tx_builder()
+            .add_whitelisted_liquidator(market, liquidator)
+            .await?;
+        let events = self
+            .tx_broadcast()
+            .broadcast_transaction(tx.sign(&[self.signer], self.network))
+            .await?;
+        Ok(events)
+    }
+
+    pub async fn remove_whitelisted_liquidator(
+        &self,
+        market: &Pubkey,
+        liquidator: Pubkey,
+    ) -> Result<AutaraEvents, AutaraClientError> {
+        let (_, tx) = self
+            .tx_builder()
+            .remove_whitelisted_liquidator(market, liquidator)
+            .await?;
+        let events = self
+            .tx_broadcast()
+            .broadcast_transaction(tx.sign(&[self.signer], self.network))
+            .await?;
+        Ok(events)
+    }
+
     pub async fn liquidate(
         &self,
         market: &Pubkey,
