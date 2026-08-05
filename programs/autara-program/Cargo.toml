@@ -22,3 +22,4 @@ borsh.workspace = true
 bytemuck.workspace = true
 num_enum.workspace = true
 hex-literal.workspace = true
+bs58.workspace = true

@@ -27,6 +27,7 @@ clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
+bs58 = { workspace = true }
 sha2 = "0.10"
 # Zero-copy decode of on-chain Market / GlobalConfig / Pyth oracle accounts in
 # the read-only `verify` subcommand (autara-lib state types are bytemuck Pod).
