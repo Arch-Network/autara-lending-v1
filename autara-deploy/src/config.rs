@@ -283,8 +283,7 @@ where
 }
 
 fn parse_pubkey(key: &str, value: &str) -> Result<Pubkey> {
-    parse_pubkey_base58_or_hex(value)
-        .map_err(|e| anyhow!("invalid pubkey for {key}: {e}"))
+    parse_pubkey_base58_or_hex(value).map_err(|e| anyhow!("invalid pubkey for {key}: {e}"))
 }
 
 fn parse_pubkey_base58_or_hex(value: &str) -> Result<Pubkey> {
