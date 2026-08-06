@@ -13,3 +13,6 @@ user.key
 .keys-testnet/
 .keys-mainnet/
 .keys-*/
+
+# Local planning artifacts must never be committed.
+/docs/superpowers/
