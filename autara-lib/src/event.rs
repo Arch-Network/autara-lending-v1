@@ -26,6 +26,8 @@ pub enum AurataEventTag {
     WithdrawAndRepay,
     SocializeLoss,
     Donation,
+    CapitalSweepStarted,
+    CapitalSweepSettled,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -125,6 +127,41 @@ pub struct DonateSupplyEvent {
     pub amount: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(
+    feature = "client",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
+pub struct CapitalSweepStartedEvent {
+    pub market: Pubkey,
+    pub curator: Pubkey,
+    pub position: Pubkey,
+    pub collateral_mint: Pubkey,
+    pub health_before_sweep: BorrowPositionHealth,
+    pub collateral_swept: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(
+    feature = "client",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
+pub struct CapitalSweepSettledEvent {
+    pub market: Pubkey,
+    pub curator: Pubkey,
+    pub position: Pubkey,
+    pub supply_mint: Pubkey,
+    pub collateral_mint: Pubkey,
+    pub health_before_settlement: BorrowPositionHealth,
+    pub health_after_settlement: BorrowPositionHealth,
+    pub supply_repaid: u64,
+    pub collateral_liquidated: u64,
+    pub curator_bonus: u64,
+    pub collateral_returned: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
     feature = "client",
@@ -145,6 +182,8 @@ pub enum AutaraEvent {
     ReedeemCuratorFees(ReedeemFeeEvent),
     SocializeLoss(SocializeLossEvent),
     DonateSupply(DonateSupplyEvent),
+    CapitalSweepStarted(CapitalSweepStartedEvent),
+    CapitalSweepSettled(CapitalSweepSettledEvent),
 }
 
 impl AutaraEvent {
@@ -264,6 +303,14 @@ impl BorshSerialize for AutaraEvent {
                 AurataEventTag::Donation.serialize(writer)?;
                 event.serialize(writer)
             }
+            AutaraEvent::CapitalSweepStarted(event) => {
+                AurataEventTag::CapitalSweepStarted.serialize(writer)?;
+                event.serialize(writer)
+            }
+            AutaraEvent::CapitalSweepSettled(event) => {
+                AurataEventTag::CapitalSweepSettled.serialize(writer)?;
+                event.serialize(writer)
+            }
         }
     }
 }
@@ -303,6 +350,52 @@ impl BorshDeserialize for AutaraEvent {
             AurataEventTag::Donation => {
                 Ok(AutaraEvent::DonateSupply(<_>::deserialize_reader(reader)?))
             }
+            AurataEventTag::CapitalSweepStarted => Ok(AutaraEvent::CapitalSweepStarted(
+                <_>::deserialize_reader(reader)?,
+            )),
+            AurataEventTag::CapitalSweepSettled => Ok(AutaraEvent::CapitalSweepSettled(
+                <_>::deserialize_reader(reader)?,
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capital_sweep_events_are_appended_and_round_trip() {
+        let market = Pubkey::new_unique();
+        let curator = Pubkey::new_unique();
+        let position = Pubkey::new_unique();
+        let events = [
+            AutaraEvent::CapitalSweepStarted(CapitalSweepStartedEvent {
+                market,
+                curator,
+                position,
+                collateral_mint: Pubkey::new_unique(),
+                health_before_sweep: BorrowPositionHealth::default(),
+                collateral_swept: 123,
+            }),
+            AutaraEvent::CapitalSweepSettled(CapitalSweepSettledEvent {
+                market,
+                curator,
+                position,
+                supply_mint: Pubkey::new_unique(),
+                collateral_mint: Pubkey::new_unique(),
+                health_before_settlement: BorrowPositionHealth::default(),
+                health_after_settlement: BorrowPositionHealth::default(),
+                supply_repaid: 10,
+                collateral_liquidated: 20,
+                curator_bonus: 2,
+                collateral_returned: 78,
+            }),
+        ];
+        for (expected_tag, event) in [13u8, 14].into_iter().zip(events) {
+            let encoded = borsh::to_vec(&event).unwrap();
+            assert_eq!(encoded[0], expected_tag);
+            assert_eq!(AutaraEvent::try_from_slice(&encoded).unwrap(), event);
         }
     }
 }
