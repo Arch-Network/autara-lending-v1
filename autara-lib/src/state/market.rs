@@ -1737,6 +1737,45 @@ pub mod tests {
     }
 
     #[test]
+    fn capital_sweep_settlement_accepts_the_exact_collateral_return_bound() {
+        let (mut preview_market, mut preview_position, collateral_oracle, supply_oracle) =
+            unhealthy_capital_sweep_fixture();
+        preview_market
+            .begin_capital_sweep(&mut preview_position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+        let required_collateral_return = preview_market
+            .settle_capital_sweep(
+                &mut preview_position,
+                &collateral_oracle,
+                &supply_oracle,
+                USDC(100.),
+                u64::MAX,
+            )
+            .unwrap()
+            .collateral_atoms_returned;
+
+        let (mut market, mut position, collateral_oracle, supply_oracle) =
+            unhealthy_capital_sweep_fixture();
+        market
+            .begin_capital_sweep(&mut position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+        let settlement = market
+            .settle_capital_sweep(
+                &mut position,
+                &collateral_oracle,
+                &supply_oracle,
+                USDC(100.),
+                required_collateral_return,
+            )
+            .unwrap();
+
+        assert_eq!(
+            settlement.collateral_atoms_returned,
+            required_collateral_return
+        );
+    }
+
+    #[test]
     fn pending_capital_sweep_locks_ordinary_position_operations() {
         let (mut market, mut position, collateral_oracle, supply_oracle) =
             unhealthy_capital_sweep_fixture();
@@ -1782,11 +1821,312 @@ pub mod tests {
         );
     }
 
+    #[test]
+    fn capital_sweep_eligibility_includes_unhealthy_boundary_and_excludes_one_hundred_percent() {
+        fn position_at_supply_price(
+            supply_price: IFixedPoint,
+        ) -> (Market, BorrowPosition, OracleRate, OracleRate) {
+            let mut market = create_btc_usdc_market();
+            let mut position = BorrowPosition::default();
+            let collateral_oracle =
+                OracleRate::new(IFixedPoint::from_num(100_000), IFixedPoint::zero());
+            let healthy_supply_oracle = OracleRate::new(IFixedPoint::one(), IFixedPoint::zero());
+            market.deposit_collateral(&mut position, BTC(0.5)).unwrap();
+            market
+                .borrow(
+                    &mut position,
+                    USDC(20_000.),
+                    &healthy_supply_oracle,
+                    &collateral_oracle,
+                )
+                .unwrap();
+            let supply_oracle = OracleRate::new(supply_price, IFixedPoint::zero());
+            (market, position, collateral_oracle, supply_oracle)
+        }
+
+        let (mut boundary_market, mut boundary_position, collateral_oracle, supply_oracle) =
+            position_at_supply_price(IFixedPoint::from_num(2.25));
+        let boundary_health = boundary_market
+            .borrow_position_health(&boundary_position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+        assert_eq!(
+            boundary_health.ltv,
+            boundary_market.config().ltv_config().unhealthy_ltv
+        );
+        boundary_market
+            .begin_capital_sweep(&mut boundary_position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+
+        let (mut insolvent_market, mut insolvent_position, collateral_oracle, supply_oracle) =
+            position_at_supply_price(IFixedPoint::from_num(2.5));
+        let insolvent_health = insolvent_market
+            .borrow_position_health(&insolvent_position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+        assert_eq!(insolvent_health.ltv, IFixedPoint::one());
+        assert_eq!(
+            insolvent_market
+                .begin_capital_sweep(&mut insolvent_position, &collateral_oracle, &supply_oracle,)
+                .unwrap_err(),
+            LendingError::CapitalSweepPositionInsolvent
+        );
+    }
+
+    #[test]
+    fn zero_repay_cap_returns_all_swept_collateral_without_changing_debt() {
+        let (mut market, mut position, collateral_oracle, supply_oracle) =
+            unhealthy_capital_sweep_fixture();
+        let swept = position.collateral_deposited_atoms();
+        let shares_before = position.borrowed_shares();
+        market
+            .begin_capital_sweep(&mut position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+
+        let settlement = market
+            .settle_capital_sweep(
+                &mut position,
+                &collateral_oracle,
+                &supply_oracle,
+                0,
+                u64::MAX,
+            )
+            .unwrap();
+
+        assert_eq!(
+            settlement
+                .liquidation_result_with_bonus
+                .borrowed_atoms_to_repay,
+            0
+        );
+        assert_eq!(settlement.collateral_atoms_returned, swept);
+        assert_eq!(position.borrowed_shares(), shares_before);
+        assert_eq!(position.collateral_deposited_atoms(), swept);
+        assert_eq!(position.swept_collateral_atoms(), 0);
+        assert_eq!(market.collateral_vault().total_collateral_atoms(), swept);
+        assert_eq!(
+            settlement.health_after_settlement.ltv,
+            settlement.health_before_settlement.ltv
+        );
+    }
+
+    #[test]
+    fn settlement_uses_debt_after_interest_accrues_during_pending_sweep() {
+        let (mut market, mut position, collateral_oracle, supply_oracle) =
+            unhealthy_capital_sweep_fixture();
+        let debt_before = market
+            .supply_vault()
+            .borrow_shares_to_atoms(position.borrowed_shares())
+            .unwrap();
+        market
+            .begin_capital_sweep(&mut position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+        market
+            .sync_clock(crate::constant::SECONDS_PER_YEAR as i64)
+            .unwrap();
+        let current_debt = market
+            .supply_vault()
+            .borrow_shares_to_atoms(position.borrowed_shares())
+            .unwrap();
+        assert!(current_debt > debt_before);
+
+        let settlement = market
+            .settle_capital_sweep(
+                &mut position,
+                &collateral_oracle,
+                &supply_oracle,
+                USDC(100.),
+                u64::MAX,
+            )
+            .unwrap();
+
+        assert_eq!(
+            settlement.health_before_settlement.borrowed_atoms,
+            current_debt
+        );
+        assert_eq!(
+            settlement
+                .liquidation_result_with_bonus
+                .borrowed_atoms_to_repay,
+            USDC(100.)
+        );
+    }
+
+    #[test]
+    fn unhealthy_position_can_be_swept_again_after_partial_settlement() {
+        let (mut market, mut position, collateral_oracle, supply_oracle) =
+            unhealthy_capital_sweep_fixture();
+        market
+            .begin_capital_sweep(&mut position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+        let first = market
+            .settle_capital_sweep(
+                &mut position,
+                &collateral_oracle,
+                &supply_oracle,
+                USDC(100.),
+                u64::MAX,
+            )
+            .unwrap();
+        assert!(first.health_after_settlement.ltv > market.config().ltv_config().unhealthy_ltv);
+        let collateral_after_first = position.collateral_deposited_atoms();
+
+        market
+            .begin_capital_sweep(&mut position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+
+        assert_eq!(position.swept_collateral_atoms(), collateral_after_first);
+        assert_eq!(position.collateral_deposited_atoms(), 0);
+    }
+
+    #[test]
+    fn partial_insolvent_settlement_hands_the_position_back_to_normal_liquidation() {
+        let (mut market, mut position, collateral_oracle, unhealthy_supply_oracle) =
+            unhealthy_capital_sweep_fixture();
+        market
+            .begin_capital_sweep(&mut position, &collateral_oracle, &unhealthy_supply_oracle)
+            .unwrap();
+        let insolvent_supply_oracle =
+            OracleRate::new(IFixedPoint::from_num(3), IFixedPoint::from_num(0.001));
+
+        let settlement = market
+            .settle_capital_sweep(
+                &mut position,
+                &collateral_oracle,
+                &insolvent_supply_oracle,
+                USDC(100.),
+                u64::MAX,
+            )
+            .unwrap();
+        assert!(settlement.health_after_settlement.ltv >= IFixedPoint::one());
+        assert!(!position.borrowed_shares().is_zero());
+        assert!(position.collateral_deposited_atoms() > 0);
+        assert_eq!(position.swept_collateral_atoms(), 0);
+        assert_eq!(
+            market
+                .begin_capital_sweep(&mut position, &collateral_oracle, &insolvent_supply_oracle,)
+                .unwrap_err(),
+            LendingError::CapitalSweepPositionInsolvent
+        );
+
+        market
+            .liquidate(
+                &mut position,
+                &collateral_oracle,
+                &insolvent_supply_oracle,
+                USDC(100.),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn sweeping_one_position_preserves_other_position_and_total_vault_accounting() {
+        let mut market = create_btc_usdc_market();
+        let mut swept_position = BorrowPosition::default();
+        let mut other_position = BorrowPosition::default();
+        let collateral_oracle = default_btc_oracle_rate();
+        let healthy_supply_oracle = default_usd_oracle_rate();
+        let unhealthy_supply_oracle =
+            OracleRate::new(IFixedPoint::from_num(2.3), IFixedPoint::from_num(0.001));
+
+        for position in [&mut swept_position, &mut other_position] {
+            market.deposit_collateral(position, BTC(0.5)).unwrap();
+            market
+                .borrow(
+                    position,
+                    USDC(20_000.),
+                    &healthy_supply_oracle,
+                    &collateral_oracle,
+                )
+                .unwrap();
+        }
+        let other_position_before = other_position;
+        assert_eq!(market.collateral_vault().total_collateral_atoms(), BTC(1.));
+
+        market
+            .begin_capital_sweep(
+                &mut swept_position,
+                &collateral_oracle,
+                &unhealthy_supply_oracle,
+            )
+            .unwrap();
+
+        assert_eq!(market.collateral_vault().total_collateral_atoms(), BTC(0.5));
+        assert_eq!(
+            other_position.collateral_deposited_atoms(),
+            other_position_before.collateral_deposited_atoms()
+        );
+        assert_eq!(
+            other_position.borrowed_shares(),
+            other_position_before.borrowed_shares()
+        );
+
+        market
+            .settle_capital_sweep(
+                &mut swept_position,
+                &collateral_oracle,
+                &unhealthy_supply_oracle,
+                0,
+                u64::MAX,
+            )
+            .unwrap();
+        assert_eq!(market.collateral_vault().total_collateral_atoms(), BTC(1.));
+    }
+
     mod prop_tests {
         use super::*;
         use proptest::prelude::*;
 
         proptest! {
+            #[test]
+            fn capital_sweep_settlement_preserves_invariants_for_any_repay_cap(
+                max_repay_whole_usdc in 0u64..=20_000u64,
+            ) {
+                let (mut market, mut position, collateral_oracle, supply_oracle) =
+                    unhealthy_capital_sweep_fixture();
+                let swept = position.collateral_deposited_atoms();
+                market
+                    .begin_capital_sweep(&mut position, &collateral_oracle, &supply_oracle)
+                    .unwrap();
+                let debt_before = market
+                    .supply_vault()
+                    .borrow_shares_to_atoms(position.borrowed_shares())
+                    .unwrap();
+                let max_repay_atoms = max_repay_whole_usdc * 100_000_000;
+
+                let settlement = market
+                    .settle_capital_sweep(
+                        &mut position,
+                        &collateral_oracle,
+                        &supply_oracle,
+                        max_repay_atoms,
+                        u64::MAX,
+                    )
+                    .unwrap();
+                let debt_after = market
+                    .supply_vault()
+                    .borrow_shares_to_atoms(position.borrowed_shares())
+                    .unwrap();
+
+                prop_assert!(
+                    settlement.liquidation_result_with_bonus.borrowed_atoms_to_repay
+                        <= max_repay_atoms
+                );
+                prop_assert!(settlement.collateral_atoms_returned <= swept);
+                prop_assert!(debt_after <= debt_before);
+                prop_assert!(
+                    settlement.health_after_settlement.ltv
+                        <= settlement.health_before_settlement.ltv
+                );
+                prop_assert_eq!(position.swept_collateral_atoms(), 0);
+                prop_assert_eq!(
+                    position.collateral_deposited_atoms(),
+                    settlement.collateral_atoms_returned
+                );
+                prop_assert_eq!(
+                    market.collateral_vault().total_collateral_atoms(),
+                    settlement.collateral_atoms_returned
+                );
+            }
+
             #[test]
             fn borrow_always_respects_max_ltv(
                 collateral_btc in 1u64..100u64,
