@@ -1,4 +1,3 @@
-pub mod begin_capital_sweep;
 pub mod borrow_apl;
 pub mod borrow_deposit_apl;
 pub mod create_borrow_position;
@@ -11,7 +10,6 @@ pub mod liquidate;
 pub mod redeem_curator_fees;
 pub mod redeem_protocol_fees;
 pub mod repay_apl;
-pub mod settle_capital_sweep;
 pub mod socialize_loss;
 pub mod supply_apl;
 pub mod update_config;

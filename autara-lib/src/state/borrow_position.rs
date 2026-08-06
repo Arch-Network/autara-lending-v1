@@ -31,10 +31,7 @@ pub struct BorrowPosition {
     initial_borrowed_atoms: u64,
     /// Track the total borrow shares of supply vault owned by this position
     borrowed_shares: UFixedPoint,
-    /// Collateral held by the curator for an off-chain liquidation sale.
-    /// A non-zero value means ordinary position operations are locked.
-    swept_collateral_atoms: u64,
-    pad: Padding<120>,
+    pad: Padding<128>,
 }
 
 impl BorrowPosition {
@@ -44,7 +41,6 @@ impl BorrowPosition {
         self.collateral_deposited_atoms = 0;
         self.initial_borrowed_atoms = 0;
         self.borrowed_shares = UFixedPoint::zero();
-        self.swept_collateral_atoms = 0;
     }
 
     #[inline(always)]
@@ -70,45 +66,6 @@ impl BorrowPosition {
     #[inline(always)]
     pub fn initial_borrowed_atoms(&self) -> u64 {
         self.initial_borrowed_atoms
-    }
-
-    #[inline(always)]
-    pub fn swept_collateral_atoms(&self) -> u64 {
-        self.swept_collateral_atoms
-    }
-
-    #[inline(always)]
-    pub fn capital_sweep_pending(&self) -> bool {
-        self.swept_collateral_atoms != 0
-    }
-
-    pub fn ensure_capital_sweep_inactive(&self) -> LendingResult {
-        if self.capital_sweep_pending() {
-            return Err(LendingError::CapitalSweepPending.into());
-        }
-        Ok(())
-    }
-
-    pub fn begin_capital_sweep(&mut self) -> LendingResult<u64> {
-        self.ensure_capital_sweep_inactive()?;
-        let swept_collateral_atoms = self.collateral_deposited_atoms;
-        self.collateral_deposited_atoms = 0;
-        self.swept_collateral_atoms = swept_collateral_atoms;
-        Ok(swept_collateral_atoms)
-    }
-
-    pub fn settle_capital_sweep(
-        &mut self,
-        shares_repaid: UFixedPoint,
-        collateral_atoms_returned: u64,
-    ) -> LendingResult {
-        if !self.capital_sweep_pending() {
-            return Err(LendingError::NoCapitalSweepPending.into());
-        }
-        self.repay(shares_repaid)?;
-        self.collateral_deposited_atoms = collateral_atoms_returned;
-        self.swept_collateral_atoms = 0;
-        Ok(())
     }
 
     pub fn deposit_collateral(&mut self, atoms: u64) -> LendingResult {
@@ -188,15 +145,6 @@ pub struct LiquidationResultWithCtx {
     pub liquidation_result_with_bonus: LiquidationResultWithBonus,
     pub health_before_liquidation: BorrowPositionHealth,
     pub health_after_liquidation: BorrowPositionHealth,
-}
-
-#[repr(C)]
-#[derive(Default, Debug, Clone, Copy)]
-pub struct CapitalSweepSettlementResult {
-    pub liquidation_result_with_bonus: LiquidationResultWithBonus,
-    pub health_before_settlement: BorrowPositionHealth,
-    pub health_after_settlement: BorrowPositionHealth,
-    pub collateral_atoms_returned: u64,
 }
 
 #[cfg(test)]
@@ -308,73 +256,5 @@ mod tests {
         assert!(pos.borrowed_shares().is_zero());
         assert_eq!(pos.authority(), &new_auth);
         assert_eq!(pos.market(), &new_market);
-    }
-
-    #[test]
-    fn begin_capital_sweep_moves_collateral_without_changing_debt() {
-        let mut pos = create_position();
-        let shares = UFixedPoint::from_u64(500);
-        pos.deposit_collateral(1_000).unwrap();
-        pos.borrow(500, shares).unwrap();
-
-        let swept = pos.begin_capital_sweep().unwrap();
-
-        assert_eq!(swept, 1_000);
-        assert_eq!(pos.collateral_deposited_atoms(), 0);
-        assert_eq!(pos.swept_collateral_atoms(), 1_000);
-        assert!(pos.capital_sweep_pending());
-        assert_eq!(pos.initial_borrowed_atoms(), 500);
-        assert_eq!(pos.borrowed_shares(), shares);
-    }
-
-    #[test]
-    fn cannot_begin_a_second_capital_sweep() {
-        let mut pos = create_position();
-        pos.deposit_collateral(1_000).unwrap();
-        pos.begin_capital_sweep().unwrap();
-
-        let error = pos.begin_capital_sweep().unwrap_err();
-
-        assert_eq!(error, LendingError::CapitalSweepPending);
-    }
-
-    #[test]
-    fn settle_capital_sweep_restores_unused_collateral_and_repays_shares() {
-        let mut pos = create_position();
-        pos.deposit_collateral(1_000).unwrap();
-        pos.borrow(500, UFixedPoint::from_u64(500)).unwrap();
-        pos.begin_capital_sweep().unwrap();
-
-        pos.settle_capital_sweep(UFixedPoint::from_u64(200), 600)
-            .unwrap();
-
-        assert_eq!(pos.collateral_deposited_atoms(), 600);
-        assert_eq!(pos.swept_collateral_atoms(), 0);
-        assert!(!pos.capital_sweep_pending());
-        assert!(pos.initial_borrowed_atoms() < 500);
-        assert_eq!(pos.borrowed_shares(), UFixedPoint::from_u64(300));
-    }
-
-    #[test]
-    fn cannot_settle_when_no_capital_sweep_is_pending() {
-        let mut pos = create_position();
-
-        let error = pos
-            .settle_capital_sweep(UFixedPoint::zero(), 0)
-            .unwrap_err();
-
-        assert_eq!(error, LendingError::NoCapitalSweepPending);
-    }
-
-    #[test]
-    fn initialize_clears_pending_capital_sweep() {
-        let mut pos = create_position();
-        pos.deposit_collateral(1_000).unwrap();
-        pos.begin_capital_sweep().unwrap();
-
-        pos.initialize(Pubkey::new_unique(), Pubkey::new_unique());
-
-        assert_eq!(pos.swept_collateral_atoms(), 0);
-        assert!(!pos.capital_sweep_pending());
     }
 }
