@@ -46,7 +46,7 @@ impl Network {
         }
     }
 
-    /// Bitcoin network used by `build_and_sign_transaction` / `ProgramDeployer`.
+    /// Bitcoin network used by `build_and_sign_transaction` / ELF upload.
     /// Testnet uses `Testnet4`, matching the repo's existing testnet deploy;
     /// mainnet uses `Bitcoin` (matches `arch_sdk::Config::mainnet`).
     pub fn bitcoin_network(&self) -> Result<BitcoinNetwork> {
