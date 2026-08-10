@@ -36,7 +36,8 @@ DRY_RUN=1 cargo run -p autara-deploy
    derived global-config PDA, token mints, ELF presence, RPC reachability, and
    on-chain balances. Includes a **program-id guard** (see below).
 2. **Deploy programs** — uploads `target/deploy/autara_program.so` and
-   `autara_oracle.so` via the SDK `ProgramDeployer` (idempotent).
+   `autara_oracle.so` via the deploy crate's ELF uploader (idempotent; chunks
+   sized for Arch's 1232-byte transaction limit).
 3. **create_global_config** — admin + fee receiver + fee share (idempotent).
 4. **Token setup** — ensures every configured `TOKENS` mint exists on-chain
    (idempotent; fails loudly if a mint is missing — create mints out-of-band via
