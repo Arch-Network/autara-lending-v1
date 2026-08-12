@@ -396,15 +396,10 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .get_market(market_key)
             .context("market not found")?;
         let mut ixs = vec![];
-        if let Some(ix) = self
-            .maybe_create_ata(
-                &self.authority_key,
-                market.market().collateral_vault().mint(),
-            )
-            .await?
-        {
-            ixs.push(ix);
-        }
+        ixs.push(self.ensure_ata_ix(
+            &self.authority_key,
+            market.market().collateral_vault().mint(),
+        ));
         let (supply_oracle, collateral_oracle) = market.market().get_oracle_keys();
         ixs.push(autara_lib::ixs::begin_capital_sweep_ix(
             self.autara_program_id,
@@ -438,9 +433,7 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             market.market().supply_vault().mint(),
             market.market().collateral_vault().mint(),
         ] {
-            if let Some(ix) = self.maybe_create_ata(&self.authority_key, mint).await? {
-                ixs.push(ix);
-            }
+            ixs.push(self.ensure_ata_ix(&self.authority_key, mint));
         }
         let (supply_oracle, collateral_oracle) = market.market().get_oracle_keys();
         ixs.push(autara_lib::ixs::settle_capital_sweep_ix(
