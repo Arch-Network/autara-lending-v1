@@ -5,6 +5,7 @@ use crate::{
     ixs::UpdateGlobalConfigAccounts,
 };
 
+#[inline(never)]
 pub fn process_update_global_config(
     accounts: &UpdateGlobalConfigAccounts,
     instruction: &UpdateGlobalConfigInstruction,

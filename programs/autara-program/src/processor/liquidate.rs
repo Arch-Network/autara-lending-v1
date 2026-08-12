@@ -9,6 +9,7 @@ use autara_lib::{
 
 use crate::{error::LendingProgramResult, ixs::LiquidateAccounts};
 
+#[inline(never)]
 pub fn process_liquidate(
     liquidate_accounts: &LiquidateAccounts,
     data: &LiquidateInstruction,

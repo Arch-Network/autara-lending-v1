@@ -16,6 +16,7 @@ pub struct CreateSupplyPositionAccounts<'a, 'b> {
 }
 
 impl<'a, 'b> CreateSupplyPositionAccounts<'a, 'b> {
+    #[inline(never)]
     pub fn from_accounts(
         accounts: &mut impl Iterator<Item = &'b AccountInfo<'a>>,
     ) -> LendingProgramResult<Self>
