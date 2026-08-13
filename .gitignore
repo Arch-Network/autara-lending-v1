@@ -16,3 +16,6 @@ user.key
 
 # Local planning artifacts must never be committed.
 /docs/superpowers/
+
+# Local Git worktrees used for isolated feature development.
+/.worktrees/
