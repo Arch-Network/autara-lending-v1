@@ -93,8 +93,8 @@ pub fn process_idl_instruction(
     accounts: &[AccountInfo],
     data: &[u8],
 ) -> LendingProgramResult {
-    let ix = IdlInstruction::try_from_slice(data)
-        .map_err(|_| ProgramError::InvalidInstructionData)?;
+    let ix =
+        IdlInstruction::try_from_slice(data).map_err(|_| ProgramError::InvalidInstructionData)?;
     let mut iter = accounts.iter();
     match ix {
         IdlInstruction::Create { data_len } => idl_create_account(program_id, &mut iter, data_len),
@@ -313,7 +313,8 @@ fn idl_set_buffer(program_id: &Pubkey, iter: &mut AccIter<'_, '_>) -> LendingPro
     {
         let b = buffer.try_borrow_data()?;
         let i = idl.try_borrow_data()?;
-        if b[AUTHORITY_OFFSET..AUTHORITY_OFFSET + 32] != i[AUTHORITY_OFFSET..AUTHORITY_OFFSET + 32] {
+        if b[AUTHORITY_OFFSET..AUTHORITY_OFFSET + 32] != i[AUTHORITY_OFFSET..AUTHORITY_OFFSET + 32]
+        {
             return Err(ProgramError::InvalidArgument.into());
         }
     }
@@ -383,11 +384,7 @@ fn idl_resize_account(
             let ix = system_instruction::transfer(authority.key, idl.key, topup);
             invoke_signed_unchecked(
                 &ix,
-                &[
-                    authority.clone(),
-                    idl.clone(),
-                    system_program.clone(),
-                ],
+                &[authority.clone(), idl.clone(), system_program.clone()],
                 &[],
             )?;
         }
