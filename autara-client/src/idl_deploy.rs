@@ -44,34 +44,37 @@ pub fn explorer_tx(txid: &Hash) -> String {
     )
 }
 
-/// Retry `op` on error with linear backoff. Transient RPC failures (connection
-/// resets under the ~800-tx write storm) must not abort an upgrade midway —
-/// loader `write`s are idempotent, so resubmitting a batch is always safe.
-async fn with_retries<T, F, Fut>(label: &str, mut op: F) -> anyhow::Result<T>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = anyhow::Result<T>>,
-{
-    const ATTEMPTS: u32 = 4;
-    let mut last = None;
-    for attempt in 1..=ATTEMPTS {
-        match op().await {
-            Ok(v) => return Ok(v),
-            Err(e) => {
-                println!("        {label}: attempt {attempt}/{ATTEMPTS} failed: {e}");
-                last = Some(e);
-                tokio::time::sleep(std::time::Duration::from_secs(2 * attempt as u64)).await;
-            }
-        }
-    }
-    Err(last.unwrap())
+/// How many write/reconcile passes before giving up (each pass re-signs the
+/// still-missing chunks against a fresh blockhash).
+const MAX_WRITE_PASSES: usize = 4;
+
+/// Backoff between readbacks while waiting for a pass's writes to settle. Ends
+/// the pass if the chunks still have not landed, so the next pass re-sends them
+/// rather than blocking on a tx that may have been evicted.
+const WRITE_SETTLE_POLL_SECS: &[u64] = &[10, 10, 15, 20, 30, 30, 60];
+
+/// Indices of the chunks whose on-chain bytes do not match `elf`.
+///
+/// `account_data` is the raw program account, i.e. the loader header followed by
+/// the ELF; anything short of the full expected length counts as missing.
+fn missing_chunks(account_data: &[u8], elf: &[u8], chunk_size: usize) -> Vec<usize> {
+    let onchain = account_data
+        .get(LoaderState::program_data_offset()..)
+        .unwrap_or_default();
+    elf.chunks(chunk_size)
+        .enumerate()
+        .filter(|(i, want)| {
+            let start = i * chunk_size;
+            onchain
+                .get(start..start + want.len())
+                .is_none_or(|got| got != *want)
+        })
+        .map(|(i, _)| i)
+        .collect()
 }
 
 async fn confirm(client: &AsyncArchRpcClient, txid: &Hash) -> anyhow::Result<()> {
-    let tx = with_retries("confirm", || async {
-        client.wait_for_processed_transaction(txid).await.map_err(de)
-    })
-    .await?;
+    let tx = client.wait_for_processed_transaction(txid).await.map_err(de)?;
     if let Status::Failed(reason) = tx.status {
         anyhow::bail!("tx {txid} failed: {reason}");
     }
@@ -182,47 +185,90 @@ pub async fn upgrade_in_place(
         send_and_log(client, tx, "truncate").await?;
     }
 
-    // 3. write ELF in chunks (batched)
+    // 3. write ELF in chunks, then reconcile against the chain and rewrite gaps.
+    //
+    // Writes are sent optimistically and never individually confirmed: the
+    // authority on whether a chunk landed is the program account itself. Each
+    // pass re-reads it, diffs against the local ELF, and rewrites only the
+    // chunks that are still wrong. That is what makes this safe against the
+    // three ways a write silently disappears here:
+    //   * a lost HTTP response (the pool may still hold the txs) — resending the
+    //     identical batch would be rejected wholesale with "transaction already
+    //     exists in pool", so a repair pass signs against a FRESH blockhash and
+    //     is therefore a different transaction, not a duplicate;
+    //   * blockhash expiry — txs older than DEFAULT_SIGNATURE_VALIDITY_BLOCKS
+    //     (150) are dropped at propose time with no processed-transaction
+    //     record, so per-tx confirmation would just block until it timed out;
+    //   * a partially-accepted batch.
+    // Verification happens BEFORE deploy, so a short write can never be made
+    // executable.
     println!("  [3/4] write ELF chunks");
     let chunk_size = elf_write_chunk_max_len();
-    let bh = client.get_best_finalized_block_hash().await.map_err(de)?;
-    let mut txs: Vec<RuntimeTransaction> = Vec::new();
-    for (i, chunk) in elf.chunks(chunk_size).enumerate() {
-        let offset = (i * chunk_size) as u32;
-        let message = ArchMessage::new(
-            &[loader_instruction::write(
-                program_pubkey,
-                authority_pubkey,
-                offset,
-                chunk.to_vec(),
-            )],
-            Some(authority_pubkey),
-            bh,
+    let total_chunks = elf.chunks(chunk_size).count();
+    let mut todo: Vec<usize> = (0..total_chunks).collect();
+
+    for pass in 1..=MAX_WRITE_PASSES {
+        let bh = client.get_best_finalized_block_hash().await.map_err(de)?;
+        let txs: Vec<RuntimeTransaction> = todo
+            .iter()
+            .map(|&i| {
+                let offset = (i * chunk_size) as u32;
+                let message = ArchMessage::new(
+                    &[loader_instruction::write(
+                        program_pubkey,
+                        authority_pubkey,
+                        offset,
+                        elf[i * chunk_size..((i + 1) * chunk_size).min(elf.len())].to_vec(),
+                    )],
+                    Some(authority_pubkey),
+                    bh,
+                );
+                let digest = message.hash();
+                RuntimeTransaction {
+                    version: 0,
+                    signatures: vec![Signature(sign_message_bip322(
+                        &authority_keypair,
+                        &digest,
+                        net,
+                    ))],
+                    message,
+                }
+            })
+            .collect();
+        println!(
+            "    pass {pass}: {} write tx(s) (chunk_size={chunk_size})",
+            txs.len()
         );
-        let digest = message.hash();
-        txs.push(RuntimeTransaction {
-            version: 0,
-            signatures: vec![Signature(sign_message_bip322(&authority_keypair, &digest, net))],
-            message,
-        });
+
+        // Send errors are logged, not fatal: the batch may well have landed, and
+        // the readback below is what decides.
+        for batch in txs.chunks(MAX_TX_BATCH_SIZE) {
+            if let Err(e) = client.send_transactions(batch.to_vec()).await.map_err(de) {
+                println!("        send batch failed (will reconcile): {e}");
+            }
+        }
+
+        // Poll the account until the writes settle or this pass gives up.
+        for wait in WRITE_SETTLE_POLL_SECS {
+            tokio::time::sleep(std::time::Duration::from_secs(*wait)).await;
+            let acc = client.read_account_info(program_pubkey).await.map_err(de)?;
+            todo = missing_chunks(&acc.data, elf, chunk_size);
+            println!("        {} / {total_chunks} chunk(s) still missing", todo.len());
+            if todo.is_empty() {
+                break;
+            }
+        }
+        if todo.is_empty() {
+            break;
+        }
     }
-    println!("    {} write txs (chunk_size={})", txs.len(), chunk_size);
-    let mut ids = Vec::new();
-    for batch in txs.chunks(MAX_TX_BATCH_SIZE) {
-        let batch_ids = with_retries("send write batch", || async {
-            client.send_transactions(batch.to_vec()).await.map_err(de)
-        })
-        .await?;
-        ids.extend(batch_ids);
-    }
-    for txid in &ids {
-        confirm(client, txid).await?;
-    }
-    if let (Some(first), Some(last)) = (ids.first(), ids.last()) {
-        println!("        wrote {} chunks", ids.len());
-        println!("        first write tx {}  {}", tx_b58(first), explorer_tx(first));
-        println!("        last  write tx {}  {}", tx_b58(last), explorer_tx(last));
-    }
+    anyhow::ensure!(
+        todo.is_empty(),
+        "{} of {total_chunks} ELF chunks still not written after {MAX_WRITE_PASSES} passes; \
+         program is RETRACTED — re-run upgrade_program to finish (it resumes)",
+        todo.len()
+    );
+    println!("        all {total_chunks} chunks verified on chain");
 
     // 4. deploy (make executable) — this is the tx that re-activates the program
     println!("  [4/4] deploy");
@@ -248,4 +294,41 @@ pub async fn upgrade_in_place(
     );
     println!("✓ upgrade complete; ELF verified.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HDR: usize = LoaderState::program_data_offset();
+
+    fn account(elf: &[u8]) -> Vec<u8> {
+        let mut v = vec![0u8; HDR];
+        v.extend_from_slice(elf);
+        v
+    }
+
+    #[test]
+    fn fully_written_elf_has_no_missing_chunks() {
+        let elf: Vec<u8> = (0..250u8).cycle().take(1000).collect();
+        assert!(missing_chunks(&account(&elf), &elf, 300).is_empty());
+    }
+
+    #[test]
+    fn corrupt_and_truncated_chunks_are_reported() {
+        let elf: Vec<u8> = (0..250u8).cycle().take(1000).collect();
+
+        // A single wrong byte inside chunk 1 flags only chunk 1.
+        let mut corrupt = account(&elf);
+        corrupt[HDR + 350] ^= 0xff;
+        assert_eq!(missing_chunks(&corrupt, &elf, 300), vec![1]);
+
+        // A short account flags every chunk past the truncation point (chunk 2
+        // is partially present, so it counts as missing too).
+        let short = account(&elf[..700]);
+        assert_eq!(missing_chunks(&short, &elf, 300), vec![2, 3]);
+
+        // Nothing written at all (header only) flags everything.
+        assert_eq!(missing_chunks(&account(&[]), &elf, 300), vec![0, 1, 2, 3]);
+    }
 }
