@@ -18,10 +18,9 @@
 
 use std::fs;
 
-use arch_sdk::{
-    generate_new_keypair, ArchRpcClient, AsyncArchRpcClient, Config, ProgramDeployer,
-};
+use arch_sdk::{generate_new_keypair, ArchRpcClient, AsyncArchRpcClient, Config};
 use autara_client::{config::path_from_workspace, idl_deploy::upgrade_in_place};
+use autara_deploy::elf_upload::deploy_program_elf;
 
 // Fresh-deploy a SMALL program, then upgrade to the big one, so the upgrade
 // GROWS the account and exercises the [2/4] resize path the live run will hit
@@ -68,17 +67,19 @@ fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("faucet funding failed: {e}"))?;
     }
 
-    // 2. Fresh deploy via the proven 0.6.2 ProgramDeployer (create + write + deploy).
+    // 2. Fresh deploy via the deploy crate's network-safe uploader (create +
+    //    write + deploy, chunks sized for the 1232-byte tx limit — 0.6.2's
+    //    ProgramDeployer chunks for 10 KiB and the node rejects those txs).
     //    If THIS succeeds, the node accepts writes — the biggest unknown is cleared.
     println!("fresh-deploying SMALL ELF to throwaway (tests node accepts writes)...");
-    ProgramDeployer::new(&config)
-        .try_deploy_program(
-            "dry-run-autara".to_string(),
-            program_keypair,
-            authority_keypair,
-            &fresh_elf_path,
-        )
-        .map_err(|e| anyhow::anyhow!("fresh deploy failed: {e:?}"))?;
+    deploy_program_elf(
+        &config,
+        "dry-run-autara",
+        program_keypair,
+        authority_keypair,
+        std::path::Path::new(&fresh_elf_path),
+    )
+    .map_err(|e| anyhow::anyhow!("fresh deploy failed: {e:?}"))?;
     println!("✓ fresh deploy ok (node accepts writes)");
 
     // Top up the throwaway authority: the upgrade pass rewrites the full ELF

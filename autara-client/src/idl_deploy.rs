@@ -18,9 +18,12 @@ use arch_sdk::{
         sanitized::ArchMessage,
         system_instruction,
     },
-    build_and_sign_transaction, extend_bytes_max_len, sign_message_bip322, AsyncArchRpcClient,
-    RuntimeTransaction, Signature, Status, MAX_TX_BATCH_SIZE,
+    build_and_sign_transaction, sign_message_bip322, AsyncArchRpcClient, RuntimeTransaction,
+    Signature, Status, MAX_TX_BATCH_SIZE,
 };
+// arch_sdk 0.6.2's `extend_bytes_max_len` sizes chunks for the old 10 KiB tx
+// limit; refreshed testnet enforces 1232 bytes. Use the 0.7.0-style probe.
+use autara_deploy::elf_upload::elf_write_chunk_max_len;
 
 fn de<E: std::fmt::Display>(e: E) -> anyhow::Error {
     anyhow::anyhow!("{e}")
@@ -155,7 +158,7 @@ pub async fn upgrade_in_place(
 
     // 3. write ELF in chunks (batched)
     println!("  [3/4] write ELF chunks");
-    let chunk_size = extend_bytes_max_len();
+    let chunk_size = elf_write_chunk_max_len();
     let bh = client.get_best_finalized_block_hash().await.map_err(de)?;
     let mut txs: Vec<RuntimeTransaction> = Vec::new();
     for (i, chunk) in elf.chunks(chunk_size).enumerate() {
