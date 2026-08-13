@@ -48,10 +48,13 @@ pub fn explorer_tx(txid: &Hash) -> String {
 /// still-missing chunks against a fresh blockhash).
 const MAX_WRITE_PASSES: usize = 4;
 
-/// Backoff between readbacks while waiting for a pass's writes to settle. Ends
-/// the pass if the chunks still have not landed, so the next pass re-sends them
-/// rather than blocking on a tx that may have been evicted.
-const WRITE_SETTLE_POLL_SECS: &[u64] = &[10, 10, 15, 20, 30, 30, 60];
+/// Seconds between readbacks while waiting for a pass's writes to land.
+const WRITE_POLL_SECS: u64 = 15;
+
+/// Consecutive readbacks showing no progress before a pass gives up and re-sends
+/// what is still missing. Only a stall ends a pass — as long as chunks keep
+/// arriving we keep waiting, however long that takes.
+const WRITE_STALL_LIMIT: u32 = 4;
 
 /// Indices of the chunks whose on-chain bytes do not match `elf`.
 ///
@@ -205,7 +208,12 @@ pub async fn upgrade_in_place(
     println!("  [3/4] write ELF chunks");
     let chunk_size = elf_write_chunk_max_len();
     let total_chunks = elf.chunks(chunk_size).count();
-    let mut todo: Vec<usize> = (0..total_chunks).collect();
+    // Seed from what is actually on chain rather than assuming everything is
+    // missing: a re-run after an aborted upgrade then rewrites only the gaps,
+    // and any chunk the previous ELF already happens to match is skipped.
+    let acc = client.read_account_info(program_pubkey).await.map_err(de)?;
+    let mut todo = missing_chunks(&acc.data, elf, chunk_size);
+    println!("    {} / {total_chunks} chunk(s) to write", todo.len());
 
     for pass in 1..=MAX_WRITE_PASSES {
         let bh = client.get_best_finalized_block_hash().await.map_err(de)?;
@@ -248,11 +256,21 @@ pub async fn upgrade_in_place(
             }
         }
 
-        // Poll the account until the writes settle or this pass gives up.
-        for wait in WRITE_SETTLE_POLL_SECS {
-            tokio::time::sleep(std::time::Duration::from_secs(*wait)).await;
+        // Wait for the pass's writes to land. Give up only once progress STALLS,
+        // not on a fixed deadline: several hundred chunks take minutes to settle,
+        // and resending chunks that are merely still in flight wastes a whole
+        // pass (and fees) rewriting bytes that were about to arrive anyway.
+        let mut stalls = 0;
+        while stalls < WRITE_STALL_LIMIT {
+            tokio::time::sleep(std::time::Duration::from_secs(WRITE_POLL_SECS)).await;
             let acc = client.read_account_info(program_pubkey).await.map_err(de)?;
-            todo = missing_chunks(&acc.data, elf, chunk_size);
+            let remaining = missing_chunks(&acc.data, elf, chunk_size);
+            stalls = if remaining.len() < todo.len() {
+                0
+            } else {
+                stalls + 1
+            };
+            todo = remaining;
             println!("        {} / {total_chunks} chunk(s) still missing", todo.len());
             if todo.is_empty() {
                 break;
