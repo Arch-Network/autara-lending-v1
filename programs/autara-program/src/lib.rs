@@ -62,7 +62,7 @@ pub fn autara_process_instruction<'a>(
 ) -> LendingProgramResult {
     // On-chain IDL account instructions. Routed before the AurataInstruction
     // decode via the 8-byte `anchor:idl` selector, which can never collide with
-    // the 1-byte AurataInstruction tags (0..=19). See processor::idl.
+    // the 1-byte AurataInstruction tags (0..=21). See processor::idl.
     if crate::processor::idl::is_idl_instruction(instruction_data) {
         return crate::processor::idl::process_idl_instruction(
             program_id,
