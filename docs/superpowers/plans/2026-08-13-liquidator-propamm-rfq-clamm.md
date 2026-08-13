@@ -4,9 +4,9 @@
 
 **Goal:** Rebase the liquidator onto current lending `main`, replace its embedded PropAMM signer with the RFQ service, and preserve atomic CLAMM routing through the current funded testnet pool.
 
-**Architecture:** The scanner consumes bot-native quote data. `propamm/` owns Arch `0.7.0` RFQ transactions, validation, signing, and HTTP submission; `router.rs` owns CLAMM/Arch `0.6.8`; lending code remains on Arch `0.6.2`. PropAMM re-quotes only the actual seized-collateral balance delta after liquidation.
+**Architecture:** The scanner consumes bot-native quote data. `propamm/` owns Arch `0.7.0` RFQ transactions, validation, signing, and HTTP submission. The CLAMM adapter stays on lending's Arch `0.6.2`, decodes the current CLAMM wire layout locally, and uses only the version-independent `whirlpool-core` quote engine. PropAMM re-quotes only the actual seized-collateral balance delta after liquidation.
 
-**Tech Stack:** Rust 2024, Tokio, Reqwest, Serde, Borsh, Autara client, Arch SDK `0.6.2`, CLAMM SDK `0.6.8`, PropAMM `0.7.0`.
+**Tech Stack:** Rust 2024, Tokio, Reqwest, Serde, Borsh, Autara client, Arch SDK `0.6.2`, `whirlpool-core`, PropAMM `0.7.0`.
 
 ## Global Constraints
 
@@ -106,7 +106,7 @@ Delete quote-signer loading, config/vault/mint/decimal copies, and local pricing
 arch_sdk_propamm = { package = "arch_sdk", version = "=0.7.0" }
 bitcoin_propamm = { package = "bitcoin", version = "=0.32.7" }
 propammprogram = { path = "../../prop-amm/program", features = ["no-entrypoint"] }
-orca_whirlpools = { path = "../../CLAMM/rust-sdk/whirlpool" }
+whirlpool-core = { path = "../../CLAMM/rust-sdk/core", features = ["floats"] }
 ```
 
 - [ ] **Step 5: Verify green and commit**
@@ -232,7 +232,7 @@ git commit -m "feat: submit liquidator-signed PropAMM RFQs"
 
 ---
 
-### Task 5: Update the CLAMM Adapter
+### Task 5: Implement the CLAMM Compatibility Adapter
 
 **Files:** Modify `src/router.rs`, `src/venue.rs`; add inline tests.
 
@@ -252,9 +252,9 @@ pub async fn best_quote_exact_in(
 ) -> anyhow::Result<Option<VenueQuote<ClammExecution>>>;
 ```
 
-- [ ] **Step 1: Write failing conversion/callback tests**
+- [ ] **Step 1: Write failing wire-layout and callback tests**
 
-Assert byte-for-byte conversion across SDK versions. From setup/swap/cleanup instructions select the unique expected-program instruction containing the configured pool; reject zero or multiple matches.
+Decode captured Whirlpool and TickArray accounts from the current CLAMM client and assert the required fields. Build a SwapV2 callback and assert byte-for-byte equality with a fixture produced by the current generated client, including discriminator, amount, threshold, account order, signer/writable flags, and supplemental tick arrays.
 
 - [ ] **Step 2: Verify red**
 
@@ -262,9 +262,9 @@ Assert byte-for-byte conversion across SDK versions. From setup/swap/cleanup ins
 cargo test -p autara-liquidator router::tests -- --nocapture
 ```
 
-- [ ] **Step 3: Implement the boundary**
+- [ ] **Step 3: Implement the compatibility boundary**
 
-Call CLAMM `0.6.8` discovery/quote APIs using its pubkeys. Convert only the selected output/callback to lending types. Reject wrong config/mints, zero active liquidity/output, and unexpected instruction sets.
+Use lending's `AsyncArchRpcClient` to load the configured pool, five tick-array candidates, mint owners, vaults, and liquidator ATAs. Decode the current wire layouts locally, pass facade values into `whirlpool-core::swap_quote_by_input_token`, derive the current oracle/tick-array PDAs, and serialize one current SwapV2 callback using lending-native types. Reject wrong program/config/mints, zero active liquidity/output, insufficient standing input balance, or mismatched derived accounts.
 
 - [ ] **Step 4: Verify green and commit**
 

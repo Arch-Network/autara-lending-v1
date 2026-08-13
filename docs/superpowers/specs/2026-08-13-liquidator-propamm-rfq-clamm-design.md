@@ -134,12 +134,20 @@ The CLAMM adapter owns pool discovery, exact-input quote construction, selection
 of the best initialized pool, and conversion of the selected swap instruction
 into the bot's lending-compatible callback representation.
 
-The current CLAMM SDK uses Arch SDK `0.6.8` and `ArchRpcClient`; lending `main`
-intentionally remains on `0.6.2` and `AsyncArchRpcClient`. The bot must not force
-a workspace-wide upgrade. CLAMM `0.6.8` dependencies are isolated behind the
-adapter and data crosses the boundary only as primitive values and serialized
-pubkeys/instructions. The adapter verifies that the returned callback targets
-the expected CLAMM program and pool before handing it to the scanner.
+The current high-level CLAMM SDK uses exact APL and Arch `0.6.8` packages while
+lending `main` intentionally remains on exact `0.6.2`. Cargo cannot include the
+two APL patch releases in one dependency graph: their semver ranges are
+compatible, so Cargo must unify them, but their exact constraints conflict. A
+minimal standalone Cargo reproduction confirmed this behavior.
+
+The bot therefore must not depend on the high-level `orca_whirlpools` crate and
+must not force a workspace-wide upgrade. Its CLAMM adapter uses lending's
+`0.6.2` RPC and program types, decodes only the current Whirlpool and TickArray
+wire fields it needs, and uses the version-independent `whirlpool-core` quote
+engine. It derives the current CLAMM PDAs and serializes the current SwapV2 wire
+instruction locally. These wire definitions are frozen by fixture tests against
+the current CLAMM generated client. The adapter verifies that the callback
+targets the expected CLAMM program and pool before handing it to the scanner.
 
 The initial implementation retains the existing operational requirement that,
 for each CLAMM opportunity, the liquidator's input-token ATA has standing
@@ -157,15 +165,16 @@ instruction list.
 
 ### Version isolation
 
-The binary may contain multiple exact Arch dependency versions:
+The binary may contain multiple semver-incompatible Arch dependency versions:
 
 - lending-native `0.6.2` types for the scanner and lending transactions;
-- CLAMM-compatible `0.6.8` types inside the CLAMM adapter;
 - PropAMM-compatible `0.7.0` transaction types or explicit JSON wire DTOs inside
   the RFQ client.
 
-Dependencies must use clear Cargo aliases where direct access is needed. No
-public function in a venue module may expose version-specific Arch types to the
+The CLAMM adapter remains on lending-native `0.6.2` and depends only on the
+Arch-independent `whirlpool-core` math crate from the current CLAMM checkout.
+PropAMM dependencies use clear Cargo aliases where direct access is needed. No
+public function in the PropAMM module may expose `0.7.0` Arch types to the
 scanner. Conversion is explicit by fixed-size byte arrays and serialized
 instruction/message data; unsafe transmutation is prohibited.
 
@@ -295,8 +304,8 @@ healthy and at least one venue is ready.
 - Classify RFQ HTTP/status error codes into unavailable, retryable, and terminal
   outcomes.
 - Verify refreshed-quote drift and collateral balance-delta calculations.
-- Convert CLAMM `0.6.8` pubkeys, account metas, and instructions to lending-native
-  values without data loss.
+- Decode current CLAMM Whirlpool/TickArray wire fixtures and build a SwapV2
+  instruction byte-for-byte equivalent to the current generated client.
 - Select the CLAMM swap instruction explicitly and reject unexpected setup or
   cleanup sequences.
 - Choose the venue with the highest valid debt-token output and handle one or
