@@ -85,6 +85,9 @@ pub fn is_idl_instruction(instruction_data: &[u8]) -> bool {
 
 /// Entry point. `data` is the instruction payload with the 8-byte selector
 /// already stripped by the dispatcher in `lib.rs`.
+/// `#[inline(never)]` for the same reason as every `process_*` handler: keep
+/// the dispatcher's stack frame within the 4KB SBPF limit.
+#[inline(never)]
 pub fn process_idl_instruction(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
