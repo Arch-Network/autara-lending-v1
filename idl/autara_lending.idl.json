@@ -173,7 +173,9 @@
     {
       "name": "log",
       "discriminator": [11],
-      "accounts": [],
+      "accounts": [
+        { "name": "market", "signer": true }
+      ],
       "args": []
     },
     {
@@ -184,7 +186,8 @@
         { "name": "market", "writable": true },
         { "name": "curator_supply_ata", "writable": true },
         { "name": "market_supply_vault", "writable": true },
-        { "name": "apl_token_program" }
+        { "name": "apl_token_program" },
+        { "name": "autara_program" }
       ],
       "args": []
     },
@@ -192,12 +195,13 @@
       "name": "redeem_protocol_fees",
       "discriminator": [14],
       "accounts": [
-        { "name": "signer", "signer": true },
+        { "name": "signer", "signer": true, "writable": true },
         { "name": "global_config" },
         { "name": "market", "writable": true },
         { "name": "receiver_supply_ata", "writable": true },
         { "name": "market_supply_vault", "writable": true },
-        { "name": "apl_token_program" }
+        { "name": "apl_token_program" },
+        { "name": "autara_program" }
       ],
       "args": []
     },
