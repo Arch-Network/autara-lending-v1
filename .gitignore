@@ -19,6 +19,3 @@ user.key
 
 # Local Git worktrees used for isolated feature development.
 /.worktrees/
-
-# Local assistant settings and commands.
-.claude/

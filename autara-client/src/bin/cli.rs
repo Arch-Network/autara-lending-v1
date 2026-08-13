@@ -842,6 +842,7 @@ async fn handle_token_command(
                 recipient
             );
 
+            let create_ata = create_ata_ix(&signer_pubkey, None, &recipient, &mint_pubkey);
             let recipient_ata = get_associated_token_address(&recipient, &mint_pubkey);
 
             let mint_to_ix = apl_token::instruction::mint_to(
@@ -853,16 +854,8 @@ async fn handle_token_command(
                 amount,
             )?;
 
-            // Create the ATA only if it doesn't already exist; minting to an existing
-            // account (a top-up) would otherwise fail with "account already in use".
-            let mut ixs = Vec::new();
-            if rpc.read_account_info(recipient_ata).await.is_err() {
-                ixs.push(create_ata_ix(&signer_pubkey, None, &recipient, &mint_pubkey));
-            }
-            ixs.push(mint_to_ix);
-
             let msg = ArchMessage::new(
-                &ixs,
+                &[create_ata, mint_to_ix],
                 Some(signer_pubkey),
                 rpc.get_best_block_hash().await?.try_into()?,
             );
@@ -1046,7 +1039,7 @@ impl TokenNames {
     }
 }
 
-async fn account_exists(rpc: &arch_sdk::ArchRpcClient, pubkey: &Pubkey) -> bool {
+async fn account_exists(rpc: &arch_sdk::AsyncArchRpcClient, pubkey: &Pubkey) -> bool {
     match rpc.read_account_info(*pubkey).await {
         Ok(_) => true,
         Err(_) => false,
@@ -1054,7 +1047,7 @@ async fn account_exists(rpc: &arch_sdk::ArchRpcClient, pubkey: &Pubkey) -> bool 
 }
 
 async fn create_mint_on_chain(
-    rpc: &arch_sdk::ArchRpcClient,
+    rpc: &arch_sdk::AsyncArchRpcClient,
     payer: &Pubkey,
     payer_keypair: Keypair,
     mint_authority: &Pubkey,

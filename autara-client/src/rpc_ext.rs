@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use anyhow::Context;
 use apl_token::state::GenericTokenAccount;
 use arch_sdk::{
-    arch_program::pubkey::Pubkey, AccountFilter, AccountInfo, AccountInfoWithPubkey, ArchRpcClient,
+    arch_program::pubkey::Pubkey, AccountFilter, AccountInfo, AccountInfoWithPubkey,
+    AsyncArchRpcClient,
 };
 use bytemuck::Pod;
 
@@ -89,7 +90,7 @@ pub trait ArchAsyncRpcExt {
 }
 
 #[async_trait::async_trait]
-impl ArchAsyncRpcExt for ArchRpcClient {
+impl ArchAsyncRpcExt for AsyncArchRpcClient {
     async fn get_multiple_accounts_batch(
         &self,
         pubkeys: &[Pubkey],

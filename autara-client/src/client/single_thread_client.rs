@@ -4,7 +4,9 @@ use std::{
 };
 
 use anyhow::Context;
-use arch_sdk::{arch_program::pubkey::Pubkey, AccountFilter, AccountInfoWithPubkey, ArchRpcClient};
+use arch_sdk::{
+    arch_program::pubkey::Pubkey, AccountFilter, AccountInfoWithPubkey, AsyncArchRpcClient,
+};
 use autara_lib::{
     pda::{find_borrow_position_pda, find_global_config_pda, find_supply_position_pda},
     state::{
@@ -25,7 +27,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct AutaraReadClientImpl {
-    arch_client: ArchRpcClient,
+    arch_client: AsyncArchRpcClient,
     autara_program_id: Pubkey,
     market_map: HashMap<Pubkey, Market>,
     supply_position_map: HashMap<Pubkey, SupplyPosition>,
@@ -35,7 +37,7 @@ pub struct AutaraReadClientImpl {
 }
 
 impl AutaraReadClientImpl {
-    pub fn new(arch_client: ArchRpcClient, autara_program_id: Pubkey) -> Self {
+    pub fn new(arch_client: AsyncArchRpcClient, autara_program_id: Pubkey) -> Self {
         Self {
             arch_client,
             autara_program_id,
@@ -47,7 +49,7 @@ impl AutaraReadClientImpl {
         }
     }
 
-    pub fn async_arch_client(&self) -> &ArchRpcClient {
+    pub fn async_arch_client(&self) -> &AsyncArchRpcClient {
         &self.arch_client
     }
 
@@ -204,16 +206,11 @@ impl AutaraReadClientImpl {
     async fn load_program_accounts_pod<T: Pod + Send>(
         &self,
         program_id: &Pubkey,
-        _filters: Option<Vec<AccountFilter>>,
+        filters: Option<Vec<AccountFilter>>,
     ) -> anyhow::Result<HashMap<Pubkey, T>> {
-        // Some RPC nodes (observed on mainnet) evaluate server-side DataSize
-        // filters incorrectly: the Market-sized filter returns no results even
-        // though an unfiltered scan returns the market account. The pod mapper
-        // (bytemuck::try_from_bytes) already rejects wrong-sized accounts, so
-        // fetch unfiltered and let the parse do the size filtering.
         let accounts = self
             .arch_client
-            .get_program_accounts_pod::<T>(program_id, None)
+            .get_program_accounts_pod::<T>(program_id, filters)
             .await
             .context("failed to load program accounts")?;
         Ok(accounts.collect())
