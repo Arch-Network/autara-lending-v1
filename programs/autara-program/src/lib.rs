@@ -49,6 +49,12 @@ pub fn process_instruction<'a>(
     autara_process_instruction(program_id, accounts, instruction_data).map_err(Into::into)
 }
 
+// Every `process_*` handler and `*Accounts::from_accounts` constructor is
+// `#[inline(never)]`: inlined here they push this dispatcher past the fixed
+// 4KB SBPF stack frame, which does not fault — over-frame spill slots silently
+// overlap the next call frame and get clobbered by the first CPI (shipped once
+// as an access violation mid-BorrowDepositApl). cargo-build-sbf only warns on
+// this; autara-deploy/scripts/build-sbf-checked.sh turns it into a build error.
 pub fn autara_process_instruction<'a>(
     program_id: &Pubkey,
     accounts: &'a [AccountInfo<'a>],

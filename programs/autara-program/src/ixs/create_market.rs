@@ -26,6 +26,7 @@ pub struct CreateMarketAccounts<'a, 'b> {
 }
 
 impl<'a, 'b> CreateMarketAccounts<'a, 'b> {
+    #[inline(never)]
     pub fn from_accounts(
         accounts: &mut impl Iterator<Item = &'b AccountInfo<'a>>,
     ) -> LendingProgramResult<Self>

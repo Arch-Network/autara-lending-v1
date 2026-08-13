@@ -8,6 +8,7 @@ use autara_lib::{
 
 use crate::{error::LendingProgramResult, ixs::SupplyAplAccounts};
 
+#[inline(never)]
 pub fn process_supply_apl(
     create_supply_position_accounts: &SupplyAplAccounts,
     data: &SupplyAplInstruction,

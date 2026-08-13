@@ -203,12 +203,12 @@ jobs:
           MULTIARCH="$(gcc -print-multiarch 2>/dev/null || echo x86_64-linux-gnu)"
           export CFLAGS="-I/usr/include/${MULTIARCH}${CFLAGS:+ $CFLAGS}"
           echo "Building autara-program ELF (cargo-build-sbf --features entrypoint)…"
-          ( cd programs/autara-program && cargo-build-sbf --features entrypoint )
+          ./autara-deploy/scripts/build-sbf-checked.sh programs/autara-program
           test -f target/deploy/autara_program.so || { echo "::error::cargo build-sbf did not produce target/deploy/autara_program.so" >&2; exit 1; }
           echo "autara_program.so sha256: $(sha256sum target/deploy/autara_program.so | cut -d' ' -f1)"
           if [ "$ACTION" = "deploy" ]; then
             echo "Building autara-oracle ELF (cargo-build-sbf --features entrypoint)…"
-            ( cd programs/autara-oracle && cargo-build-sbf --features entrypoint )
+            ./autara-deploy/scripts/build-sbf-checked.sh programs/autara-oracle
             test -f target/deploy/autara_oracle.so || { echo "::error::cargo build-sbf did not produce target/deploy/autara_oracle.so" >&2; exit 1; }
             echo "autara_oracle.so sha256: $(sha256sum target/deploy/autara_oracle.so | cut -d' ' -f1)"
           fi

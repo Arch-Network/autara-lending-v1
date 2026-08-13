@@ -12,6 +12,7 @@ use crate::{
     error::LendingProgramResult, ixs::CreateGlobalConfigAccounts, state::AutaraUninitializedAccount,
 };
 
+#[inline(never)]
 pub fn process_create_global_config(
     create_global_config_accounts: &CreateGlobalConfigAccounts,
     data: &CreateGlobalConfigInstruction,
