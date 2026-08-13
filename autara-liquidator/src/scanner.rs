@@ -1,25 +1,44 @@
-use std::sync::Arc;
+use arch_sdk::{
+    AsyncArchRpcClient, Status,
+    arch_program::{
+        bitcoin::{Network, key::Keypair},
+        pubkey::Pubkey,
+    },
+};
+use autara_client::client::{
+    blockhash_cache::BlockhashCache, read::AutaraReadClient,
+    single_thread_client::AutaraReadClientImpl, tx_broadcast::AutaraTxBroadcast,
+    tx_builder::AutaraTransactionBuilder,
+};
 
-use arch_sdk::ArchRpcClient;
-use arch_sdk::arch_program::bitcoin::Network;
-use arch_sdk::arch_program::bitcoin::key::Keypair;
-use arch_sdk::arch_program::pubkey::Pubkey;
-use autara_client::client::blockhash_cache::BlockhashCache;
-use autara_client::client::read::AutaraReadClient;
-use autara_client::client::single_thread_client::AutaraReadClientImpl;
-use autara_client::client::tx_broadcast::AutaraTxBroadcast;
-use autara_client::client::tx_builder::AutaraTransactionBuilder;
-use orca_whirlpools::SwapQuote;
+use crate::{
+    balances::{positive_balance_delta, rate_within_slippage, read_token_balance},
+    config::TokenFilter,
+    propamm::{PropAmmClient, RfqQuote},
+    router::{ClammExecution, SwapRouter},
+    venue::{Venue, VenueQuote},
+};
 
-use crate::config::TokenFilter;
-use crate::router::SwapRouter;
+const VENUE_QUOTE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+pub fn choose_venue(clamm_out: Option<u64>, propamm_out: Option<u64>) -> Option<Venue> {
+    let clamm_out = clamm_out.filter(|amount| *amount > 0);
+    let propamm_out = propamm_out.filter(|amount| *amount > 0);
+    match (clamm_out, propamm_out) {
+        (Some(clamm), Some(propamm)) if propamm > clamm => Some(Venue::PropAmm),
+        (Some(_), Some(_)) | (Some(_), None) => Some(Venue::Clamm),
+        (None, Some(_)) => Some(Venue::PropAmm),
+        (None, None) => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn scan_liquidatable_positions(
     client: &AutaraReadClientImpl,
-    router: &Arc<SwapRouter>,
-    propamm: Option<&crate::propamm::PropAmm>,
+    router: Option<&SwapRouter>,
+    propamm: Option<&PropAmmClient>,
     token_filter: &TokenFilter,
-    arch_client: &ArchRpcClient,
+    arch_client: &AsyncArchRpcClient,
     autara_program_id: Pubkey,
     keypair: &Keypair,
     signer: Pubkey,
@@ -28,11 +47,9 @@ pub async fn scan_liquidatable_positions(
     dry_run: bool,
 ) {
     let mut liquidatable_count = 0u64;
-
     let mut biggest_borrow: Option<(Pubkey, Pubkey, u64)> = None;
     let mut highest_ltv: Option<(Pubkey, Pubkey, autara_lib::math::ifixed_point::IFixedPoint)> =
         None;
-
     let tx_builder = AutaraTransactionBuilder {
         arch_client,
         autara_read_client: client,
@@ -40,7 +57,6 @@ pub async fn scan_liquidatable_positions(
         authority_key: signer,
         blockhash_cache: Some(blockhash_cache),
     };
-
     let tx_broadcast = AutaraTxBroadcast {
         program_id: &autara_program_id,
         arch_client,
@@ -48,274 +64,282 @@ pub async fn scan_liquidatable_positions(
 
     for (position_key, borrow_position) in client.all_borrow_position() {
         let market_key = borrow_position.market();
-        let market_wrapper = match client.get_market(market_key) {
-            Some(mw) => mw,
-            None => continue,
+        let Some(market_wrapper) = client.get_market(market_key) else {
+            continue;
         };
-
         let supply_mint = market_wrapper.market().supply_token_info().mint;
         let collateral_mint = market_wrapper.market().collateral_token_info().mint;
-
         if !token_filter.allows_market(&supply_mint, &collateral_mint) {
             continue;
         }
-
-        let health = match market_wrapper.borrow_position_health(&borrow_position) {
-            Ok(h) => h,
-            Err(_) => continue,
+        let Ok(health) = market_wrapper.borrow_position_health(&borrow_position) else {
+            continue;
         };
-
-        match &biggest_borrow {
-            None => biggest_borrow = Some((position_key, *market_key, health.borrowed_atoms)),
-            Some((_, _, prev_atoms)) if health.borrowed_atoms > *prev_atoms => {
-                biggest_borrow = Some((position_key, *market_key, health.borrowed_atoms));
-            }
-            _ => {}
+        if biggest_borrow
+            .as_ref()
+            .is_none_or(|(_, _, atoms)| health.borrowed_atoms > *atoms)
+        {
+            biggest_borrow = Some((position_key, *market_key, health.borrowed_atoms));
         }
-        match &highest_ltv {
-            None => highest_ltv = Some((position_key, *market_key, health.ltv)),
-            Some((_, _, prev_ltv)) if health.ltv > *prev_ltv => {
-                highest_ltv = Some((position_key, *market_key, health.ltv));
-            }
-            _ => {}
+        if highest_ltv
+            .as_ref()
+            .is_none_or(|(_, _, ltv)| health.ltv > *ltv)
+        {
+            highest_ltv = Some((position_key, *market_key, health.ltv));
         }
 
         let unhealthy_ltv = market_wrapper.market().config().ltv_config().unhealthy_ltv;
+        if health.ltv < unhealthy_ltv {
+            continue;
+        }
+        liquidatable_count += 1;
+        tracing::info!(
+            ?position_key,
+            authority = ?borrow_position.authority(),
+            ?market_key,
+            ltv = %health.ltv,
+            unhealthy_ltv = %unhealthy_ltv,
+            borrowed_atoms = health.borrowed_atoms,
+            collateral_atoms = health.collateral_atoms,
+            "LIQUIDATABLE"
+        );
 
-        if health.ltv >= unhealthy_ltv {
-            liquidatable_count += 1;
-
-            tracing::info!(
-                "LIQUIDATABLE position={:?} authority={:?} market={:?} ltv={} unhealthy_ltv={} borrowed_atoms={} collateral_atoms={}",
-                position_key,
-                borrow_position.authority(),
-                market_key,
-                health.ltv,
-                unhealthy_ltv,
-                health.borrowed_atoms,
-                health.collateral_atoms,
-            );
-
-            // Find a swap route: collateral -> supply (to repay debt).
-            //
-            // Size the swap to the collateral the liquidation will ACTUALLY seize
-            // (collateral_atoms_to_liquidate + liquidation bonus), NOT the full position
-            // collateral. We call liquidate() below with max_repay = u64::MAX, so we preview
-            // the same computation here:
-            //   * ltv >= 1 (bad debt)  -> seizes the full collateral (full liquidation),
-            //   * unhealthy <= ltv < 1 -> seizes only a PARTIAL amount (down to target LTV).
-            // Selling the full collateral on a partial liquidation would oversell tokens the
-            // liquidator never receives, making the liquidate tx revert (or bleed inventory).
-            let collateral_atoms = match market_wrapper.market().compute_liquidation_result_with_fee(
-                &borrow_position,
-                market_wrapper.collateral_oracle(),
-                market_wrapper.supply_oracle(),
-                u64::MAX,
-            ) {
-                Ok((_health_before, liquidation)) => {
-                    match liquidation.total_collateral_atoms_to_liquidate() {
-                        Ok(seized) if seized > 0 => seized,
-                        Ok(_) => {
-                            tracing::warn!(
-                                "Liquidation would seize 0 collateral for position={:?}; skipping",
-                                position_key,
-                            );
-                            continue;
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to compute seized collateral: {:#}", e);
-                            continue;
-                        }
+        let collateral_atoms = match market_wrapper.market().compute_liquidation_result_with_fee(
+            &borrow_position,
+            market_wrapper.collateral_oracle(),
+            market_wrapper.supply_oracle(),
+            u64::MAX,
+        ) {
+            Ok((_health_before, liquidation)) => {
+                match liquidation.total_collateral_atoms_to_liquidate() {
+                    Ok(amount) if amount > 0 => amount,
+                    Ok(_) => {
+                        tracing::warn!(?position_key, "Liquidation would seize zero collateral");
+                        continue;
                     }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to preview liquidation result: {:#}", e);
-                    continue;
-                }
-            };
-
-            // ---- Quote BOTH venues for collateral -> supply of the seized amount; route to best ----
-            // CLAMM (whirlpool) on-chain quote.
-            let clamm: Option<(Pubkey, orca_whirlpools::SwapInstructions, u64)> =
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(10),
-                    router.best_quote_exact_in(collateral_mint, supply_mint, collateral_atoms, Some(signer)),
-                )
-                .await
-                {
-                    Ok(Ok(Some((pool, swap_ix)))) => {
-                        let est_out = match &swap_ix.quote {
-                            SwapQuote::ExactIn(q) => q.token_est_out,
-                            SwapQuote::ExactOut(_) => 0,
-                        };
-                        Some((pool, swap_ix, est_out))
-                    }
-                    Ok(Ok(None)) => None,
-                    Ok(Err(e)) => {
-                        tracing::warn!("CLAMM quote failed: {:#}", e);
-                        None
-                    }
-                    Err(_) => {
-                        tracing::warn!("CLAMM quote timed out");
-                        None
-                    }
-                };
-            let clamm_out = clamm.as_ref().map(|(_, _, o)| *o).unwrap_or(0);
-
-            // PropAMM (RFQ vault) quote — only if configured and it supports this pair.
-            let propamm_quote: Option<(f64, u64)> = match propamm {
-                Some(p) if p.supports(&collateral_mint, &supply_mint) => match p.fetch_price().await {
-                    Ok(price) => p
-                        .quote(&collateral_mint, &supply_mint, collateral_atoms, price)
-                        .map(|(_, _, _, out)| (price, out)),
-                    Err(e) => {
-                        tracing::warn!("PropAMM price fetch failed: {:#}", e);
-                        None
-                    }
-                },
-                _ => None,
-            };
-            let propamm_out = propamm_quote.map(|(_, o)| o).unwrap_or(0);
-
-            tracing::info!(
-                "ROUTE position={:?} collateral_in={} clamm_out={} propamm_out={} -> {}",
-                position_key,
-                collateral_atoms,
-                clamm_out,
-                propamm_out,
-                if propamm_out > clamm_out { "PropAMM" } else { "CLAMM" },
-            );
-
-            if clamm_out == 0 && propamm_out == 0 {
-                tracing::warn!(
-                    "No route on any venue for {:?} -> {:?}; skipping",
-                    collateral_mint,
-                    supply_mint,
-                );
-                continue;
-            }
-
-            let use_propamm = propamm_out > clamm_out;
-
-            if dry_run {
-                tracing::info!(
-                    "DRY-RUN: would liquidate position={:?} market={:?} via {}; not broadcasting",
-                    position_key,
-                    market_key,
-                    if use_propamm { "PropAMM" } else { "CLAMM" },
-                );
-                continue;
-            }
-
-            // Whether to run the CLAMM atomic path: either it won the routing, or the
-            // PropAMM-routed liquidation failed before liquidating (fallback).
-            let mut try_clamm = !use_propamm;
-
-            if use_propamm {
-                // Decoupled path: PropAMM cannot be an atomic liquidate callback (its quote_signer
-                // must co-sign), so liquidate WITHOUT a callback (repay from the bot's float) and
-                // then swap the seized collateral on PropAMM in a separate tx.
-                //
-                // `liquidated` is true once the liquidate tx landed; a failure BEFORE that
-                // (e.g. insufficient aUSD float to repay) falls back to the atomic CLAMM
-                // path below if a CLAMM route exists. A failure AFTER (the PropAMM swap
-                // itself) must NOT fall back — the position is already liquidated.
-                let liquidated = 'propamm: {
-                    let tx_to_sign = match tx_builder
-                        .liquidate(market_key, &position_key, None, None, None)
-                        .await
-                    {
-                        Ok(tx) => tx,
-                        Err(e) => {
-                            tracing::error!("Failed to build liquidate tx (PropAMM route): {:#}", e);
-                            break 'propamm false;
-                        }
-                    };
-                    let signed_tx = tx_to_sign.sign(&[keypair.clone()], network);
-                    match tx_broadcast.broadcast_transaction(signed_tx).await {
-                        Ok(events) => tracing::info!(
-                            "Liquidation SUCCESS (no-callback, PropAMM route) position={:?} market={:?} events={:?}",
-                            position_key,
-                            market_key,
-                            events,
-                        ),
-                        Err(e) => {
-                            tracing::error!(
-                                "Liquidation FAILED (PropAMM route) for position={:?} market={:?}: {:#}",
-                                position_key,
-                                market_key,
-                                e,
-                            );
-                            break 'propamm false;
-                        }
-                    }
-                    // Swap the just-seized collateral -> supply on PropAMM.
-                    let p = propamm.expect("propamm route implies propamm configured");
-                    let price = propamm_quote.expect("propamm route implies a quote").0;
-                    match p
-                        .execute_swap(arch_client, keypair, signer, &collateral_mint, &supply_mint, collateral_atoms, price, network)
-                        .await
-                    {
-                        Ok(out) => tracing::info!(
-                            "PropAMM swap SUCCESS position={:?} collateral_in={} supply_out~{}",
-                            position_key,
-                            collateral_atoms,
-                            out,
-                        ),
-                        Err(e) => tracing::error!(
-                            "PropAMM swap FAILED after liquidation (seized collateral held by liquidator) position={:?}: {:#}",
-                            position_key,
-                            e,
-                        ),
-                    }
-                    true
-                };
-                if !liquidated {
-                    if clamm.is_some() {
-                        tracing::warn!(
-                            "Falling back to CLAMM atomic path for position={:?}",
-                            position_key,
-                        );
-                        try_clamm = true;
-                    } else {
+                    Err(error) => {
+                        tracing::warn!(?position_key, %error, "Failed to compute seized collateral");
                         continue;
                     }
                 }
             }
+            Err(error) => {
+                tracing::warn!(?position_key, %error, "Failed to preview liquidation");
+                continue;
+            }
+        };
 
-            if try_clamm {
-                // Atomic path: CLAMM swap as a CPI callback inside the liquidate instruction.
-                let Some((_pool, swap_ix, _)) = clamm else {
-                    tracing::warn!(
-                        "No CLAMM route available for position={:?}; skipping",
+        let (clamm_quote, propamm_quote) = quote_venues(
+            router,
+            propamm,
+            collateral_mint,
+            supply_mint,
+            collateral_atoms,
+            signer,
+        )
+        .await;
+        let selected = choose_venue(
+            clamm_quote.as_ref().map(|quote| quote.estimated_out),
+            propamm_quote.as_ref().map(|quote| quote.estimated_out),
+        );
+        tracing::info!(
+            ?position_key,
+            collateral_in = collateral_atoms,
+            clamm_out = clamm_quote.as_ref().map(|quote| quote.estimated_out),
+            propamm_out = propamm_quote.as_ref().map(|quote| quote.estimated_out),
+            selected = ?selected,
+            "ROUTE"
+        );
+        let Some(selected) = selected else {
+            tracing::warn!(?collateral_mint, ?supply_mint, "No valid liquidation route");
+            continue;
+        };
+        if dry_run {
+            tracing::info!(
+                ?position_key,
+                ?market_key,
+                ?selected,
+                "DRY-RUN: not broadcasting"
+            );
+            continue;
+        }
+
+        match selected {
+            Venue::Clamm => {
+                let Some(quote) = clamm_quote else {
+                    continue;
+                };
+                execute_clamm_liquidation(
+                    &tx_builder,
+                    &tx_broadcast,
+                    market_key,
+                    position_key,
+                    quote,
+                    keypair,
+                    network,
+                )
+                .await;
+            }
+            Venue::PropAmm => {
+                let Some(initial_quote) = propamm_quote else {
+                    continue;
+                };
+                let Some(propamm) = propamm else {
+                    continue;
+                };
+                let before = match read_token_balance(arch_client, signer, collateral_mint).await {
+                    Ok(balance) => balance,
+                    Err(error) => {
+                        tracing::error!(?position_key, %error, "PropAMM pre-liquidation balance read failed");
+                        if let Some(clamm) = clamm_quote {
+                            tracing::warn!(
+                                ?position_key,
+                                "Falling back to CLAMM before liquidation"
+                            );
+                            execute_clamm_liquidation(
+                                &tx_builder,
+                                &tx_broadcast,
+                                market_key,
+                                position_key,
+                                clamm,
+                                keypair,
+                                network,
+                            )
+                            .await;
+                        }
+                        continue;
+                    }
+                };
+                let transaction = match tx_builder
+                    .liquidate(market_key, &position_key, None, None, None)
+                    .await
+                {
+                    Ok(transaction) => transaction,
+                    Err(error) => {
+                        tracing::error!(?position_key, %error, "Failed to build PropAMM-route liquidation");
+                        if let Some(clamm) = clamm_quote {
+                            tracing::warn!(
+                                ?position_key,
+                                "Falling back to CLAMM before liquidation"
+                            );
+                            execute_clamm_liquidation(
+                                &tx_builder,
+                                &tx_broadcast,
+                                market_key,
+                                position_key,
+                                clamm,
+                                keypair,
+                                network,
+                            )
+                            .await;
+                        }
+                        continue;
+                    }
+                };
+                let signed = transaction.sign(&[*keypair], network);
+                if let Err(error) = tx_broadcast.broadcast_transaction(signed).await {
+                    tracing::error!(
+                        ?position_key,
+                        %error,
+                        "PropAMM-route liquidation failed or has ambiguous status; refusing fallback"
+                    );
+                    continue;
+                }
+                tracing::info!(
+                    ?position_key,
+                    ?market_key,
+                    "Liquidation SUCCESS (PropAMM route)"
+                );
+
+                let after = match read_token_balance(arch_client, signer, collateral_mint).await {
+                    Ok(balance) => balance,
+                    Err(error) => {
+                        inventory_alert(position_key, collateral_mint, 0, &error.to_string());
+                        continue;
+                    }
+                };
+                let Some(seized_delta) = positive_balance_delta(before, after) else {
+                    inventory_alert(
                         position_key,
+                        collateral_mint,
+                        0,
+                        "collateral balance did not increase after confirmed liquidation",
                     );
                     continue;
                 };
-                let ix_callback = swap_ix.instructions.into_iter().next();
-                let tx_to_sign = match tx_builder
-                    .liquidate(market_key, &position_key, None, None, ix_callback)
+                let fresh_quote = match propamm
+                    .quote_exact_in(collateral_mint, supply_mint, seized_delta, signer)
                     .await
                 {
-                    Ok(tx) => tx,
-                    Err(e) => {
-                        tracing::error!("Failed to build liquidate tx: {:#}", e);
+                    Ok(Some(quote)) => quote,
+                    Ok(None) => {
+                        inventory_alert(
+                            position_key,
+                            collateral_mint,
+                            seized_delta,
+                            "PropAMM returned no fresh exact-delta quote",
+                        );
+                        continue;
+                    }
+                    Err(error) => {
+                        inventory_alert(
+                            position_key,
+                            collateral_mint,
+                            seized_delta,
+                            &format!("fresh PropAMM quote failed: {error:#}"),
+                        );
                         continue;
                     }
                 };
-                let signed_tx = tx_to_sign.sign(&[keypair.clone()], network);
-                match tx_broadcast.broadcast_transaction(signed_tx).await {
-                    Ok(events) => tracing::info!(
-                        "Liquidation SUCCESS (CLAMM callback) position={:?} market={:?} events={:?}",
+                if !rate_within_slippage(
+                    initial_quote.amount_in,
+                    initial_quote.estimated_out,
+                    fresh_quote.amount_in,
+                    fresh_quote.estimated_out,
+                    propamm.slippage_bps(),
+                ) {
+                    inventory_alert(
                         position_key,
-                        market_key,
-                        events,
+                        collateral_mint,
+                        seized_delta,
+                        "fresh PropAMM rate exceeded the configured degradation bound",
+                    );
+                    continue;
+                }
+                let hash = match propamm
+                    .execute_quote(fresh_quote.execution, keypair, network)
+                    .await
+                {
+                    Ok(hash) => hash,
+                    Err(error) => {
+                        inventory_alert(
+                            position_key,
+                            collateral_mint,
+                            seized_delta,
+                            &format!("PropAMM RFQ submission failed: {error:#}"),
+                        );
+                        continue;
+                    }
+                };
+                match arch_client.wait_for_processed_transaction(&hash).await {
+                    Ok(processed) if processed.status == Status::Processed => tracing::info!(
+                        ?position_key,
+                        collateral_in = seized_delta,
+                        estimated_supply_out = fresh_quote.estimated_out,
+                        tx_hash = %hash,
+                        "PropAMM swap SUCCESS"
                     ),
-                    Err(e) => tracing::error!(
-                        "Liquidation FAILED for position={:?} market={:?}: {:#}",
+                    Ok(processed) => inventory_alert(
                         position_key,
-                        market_key,
-                        e,
+                        collateral_mint,
+                        seized_delta,
+                        &format!("PropAMM swap status was {:?}", processed.status),
+                    ),
+                    Err(error) => inventory_alert(
+                        position_key,
+                        collateral_mint,
+                        seized_delta,
+                        &format!("PropAMM swap confirmation failed: {error}"),
                     ),
                 }
             }
@@ -323,25 +347,140 @@ pub async fn scan_liquidatable_positions(
     }
 
     if liquidatable_count > 0 {
-        tracing::info!("Found {} liquidatable position(s)", liquidatable_count);
+        tracing::info!(liquidatable_count, "Found liquidatable positions");
     } else {
         tracing::info!("No liquidatable positions found");
     }
-
-    if let Some((pos, market, atoms)) = biggest_borrow {
-        tracing::info!(
-            "STATS biggest_borrow: position={:?} market={:?} borrowed_atoms={}",
-            pos,
-            market,
-            atoms,
-        );
+    if let Some((position, market, borrowed_atoms)) = biggest_borrow {
+        tracing::info!(?position, ?market, borrowed_atoms, "STATS biggest_borrow");
     }
-    if let Some((pos, market, ltv)) = highest_ltv {
-        tracing::info!(
-            "STATS highest_ltv: position={:?} market={:?} ltv={}",
-            pos,
-            market,
-            ltv,
-        );
+    if let Some((position, market, ltv)) = highest_ltv {
+        tracing::info!(?position, ?market, %ltv, "STATS highest_ltv");
+    }
+}
+
+async fn quote_venues(
+    router: Option<&SwapRouter>,
+    propamm: Option<&PropAmmClient>,
+    input_mint: Pubkey,
+    output_mint: Pubkey,
+    amount_in: u64,
+    signer: Pubkey,
+) -> (
+    Option<VenueQuote<ClammExecution>>,
+    Option<VenueQuote<RfqQuote>>,
+) {
+    let clamm = async {
+        let router = router?;
+        match tokio::time::timeout(
+            VENUE_QUOTE_TIMEOUT,
+            router.best_quote_exact_in(input_mint, output_mint, amount_in, signer),
+        )
+        .await
+        {
+            Ok(Ok(quote)) => quote,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "CLAMM quote failed");
+                None
+            }
+            Err(_) => {
+                tracing::warn!("CLAMM quote timed out");
+                None
+            }
+        }
+    };
+    let propamm = async {
+        let propamm = propamm?;
+        match tokio::time::timeout(
+            VENUE_QUOTE_TIMEOUT,
+            propamm.quote_exact_in(input_mint, output_mint, amount_in, signer),
+        )
+        .await
+        {
+            Ok(Ok(quote)) => quote,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "PropAMM RFQ quote failed");
+                None
+            }
+            Err(_) => {
+                tracing::warn!("PropAMM RFQ quote timed out");
+                None
+            }
+        }
+    };
+    tokio::join!(clamm, propamm)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_clamm_liquidation(
+    tx_builder: &AutaraTransactionBuilder<'_, AutaraReadClientImpl>,
+    tx_broadcast: &AutaraTxBroadcast<'_>,
+    market_key: &Pubkey,
+    position_key: Pubkey,
+    quote: VenueQuote<ClammExecution>,
+    keypair: &Keypair,
+    network: Network,
+) {
+    let pool = quote.execution.pool;
+    let transaction = match tx_builder
+        .liquidate(
+            market_key,
+            &position_key,
+            None,
+            None,
+            Some(quote.execution.callback),
+        )
+        .await
+    {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(?position_key, ?pool, %error, "Failed to build CLAMM liquidation");
+            return;
+        }
+    };
+    let signed = transaction.sign(&[*keypair], network);
+    match tx_broadcast.broadcast_transaction(signed).await {
+        Ok(events) => tracing::info!(
+            ?position_key,
+            ?market_key,
+            ?pool,
+            ?events,
+            "Liquidation SUCCESS (CLAMM callback)"
+        ),
+        Err(error) => tracing::error!(
+            ?position_key,
+            ?market_key,
+            ?pool,
+            %error,
+            "CLAMM liquidation FAILED"
+        ),
+    }
+}
+
+fn inventory_alert(position: Pubkey, mint: Pubkey, amount: u64, reason: &str) {
+    tracing::error!(
+        ?position,
+        ?mint,
+        amount,
+        reason,
+        "INVENTORY ALERT: liquidation landed but PropAMM settlement did not complete; refusing CLAMM fallback"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::venue::Venue;
+
+    use super::choose_venue;
+
+    #[test]
+    fn chooses_available_or_best_venue_and_prefers_atomic_ties() {
+        assert_eq!(choose_venue(Some(10), None), Some(Venue::Clamm));
+        assert_eq!(choose_venue(None, Some(10)), Some(Venue::PropAmm));
+        assert_eq!(choose_venue(Some(11), Some(10)), Some(Venue::Clamm));
+        assert_eq!(choose_venue(Some(10), Some(11)), Some(Venue::PropAmm));
+        assert_eq!(choose_venue(Some(10), Some(10)), Some(Venue::Clamm));
+        assert_eq!(choose_venue(Some(0), Some(0)), None);
+        assert_eq!(choose_venue(None, None), None);
     }
 }

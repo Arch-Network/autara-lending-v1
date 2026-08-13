@@ -1,0 +1,31 @@
+{
+  "rpc_url": "https://rpc.testnet.arch.network",
+  "autara_program_id": "53def2dc8516302842b10e356914d2a5f6b33425ba42aec684f706aa1cf64192",
+  "liquidator_keypair": "/home/ubuntu/autara/liquidator/keys/liquidator.key",
+  "network": "testnet",
+  "poll_interval_secs": 5,
+  "dry_run": true,
+  "restrict_tokens": [
+    "55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45",
+    "1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9"
+  ],
+  "propamm": {
+    "base_url": "https://propamm.arch.network/testnet",
+    "expected_program_id": "7a68831501d3a9806feff162e82815a36e1732964a2edd2b461faf69575c3628",
+    "slippage_bps": 100,
+    "request_timeout_ms": 8000,
+    "minimum_expiry_headroom_ms": 3000
+  },
+  "clamm": {
+    "program_id": "0a0129c4d864d1728c4b6e8f6e0e473197cb111153e379a59b9d93c038efe918",
+    "config_pubkey": "5dcbc567a5434cc84303079bfb54be234993e50962a91fda63a17ba8026c8fd0",
+    "slippage_bps": 100,
+    "pools": [
+      {
+        "pool": "06db06761eb1f114167ea2bbc4cf98cf8f98fbfc0ad18d1821e724cfeeb03461",
+        "token_a": "1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9",
+        "token_b": "55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45"
+      }
+    ]
+  }
+}

@@ -4,15 +4,17 @@
 
 **Goal:** Rebase the liquidator onto current lending `main`, replace its embedded PropAMM signer with the RFQ service, and preserve atomic CLAMM routing through the current funded testnet pool.
 
-**Architecture:** The scanner consumes bot-native quote data. `propamm/` owns Arch `0.7.0` RFQ transactions, validation, signing, and HTTP submission. The CLAMM adapter stays on lending's Arch `0.6.2`, decodes the current CLAMM wire layout locally, and uses only the version-independent `whirlpool-core` quote engine. PropAMM re-quotes only the actual seized-collateral balance delta after liquidation.
+**Architecture:** The scanner consumes bot-native quote data. `propamm/` owns RFQ transactions, validation, signing, and HTTP submission using lending's Arch `0.6.2` types plus a local decoder for PropAMM's stable wire format. The CLAMM adapter also stays on lending's Arch `0.6.2`, decodes the current CLAMM wire layout locally, and uses only the version-independent `whirlpool-core` quote engine. PropAMM re-quotes only the actual seized-collateral balance delta after liquidation.
 
-**Tech Stack:** Rust 2024, Tokio, Reqwest, Serde, Borsh, Autara client, Arch SDK `0.6.2`, `whirlpool-core`, PropAMM `0.7.0`.
+**Tech Stack:** Rust 2024, Tokio, Reqwest, Serde, Borsh, Autara client, Arch SDK `0.6.2`, and `whirlpool-core`.
 
 ## Global Constraints
 
 - Do not add a lending liquidator allowlist; behavior is unchanged.
-- Keep lending on exact Arch SDK `0.6.2`.
+- Keep the executable on exact Arch SDK `0.6.2`. Cargo cannot resolve PropAMM's exact `bitcoin 0.32.7` beside lending's exact `0.32.5`, so the bot must not import the PropAMM program/SDK crates.
 - Never load or configure the PropAMM quote-signer secret.
+- Keep all deployment-specific URLs, programs, configs, pools, and mints in JSON
+  config. The IDs below are testnet example values, not executable constants.
 - PropAMM URL/program: `https://propamm.arch.network/testnet` / `7a68831501d3a9806feff162e82815a36e1732964a2edd2b461faf69575c3628`.
 - CLAMM program/config/pool: `0a0129c4d864d1728c4b6e8f6e0e473197cb111153e379a59b9d93c038efe918` / `5dcbc567a5434cc84303079bfb54be234993e50962a91fda63a17ba8026c8fd0` / `06db06761eb1f114167ea2bbc4cf98cf8f98fbfc0ad18d1821e724cfeeb03461`.
 - aBTC/aUSD: `1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9` (8) / `55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45` (6).
@@ -103,9 +105,6 @@ Delete quote-signer loading, config/vault/mint/decimal copies, and local pricing
 - [ ] **Step 4: Add isolated dependencies**
 
 ```toml
-arch_sdk_propamm = { package = "arch_sdk", version = "=0.7.0" }
-bitcoin_propamm = { package = "bitcoin", version = "=0.32.7" }
-propammprogram = { path = "../../prop-amm/program", features = ["no-entrypoint"] }
 whirlpool-core = { path = "../../CLAMM/rust-sdk/core", features = ["floats"] }
 ```
 
@@ -128,7 +127,7 @@ git commit -m "refactor: isolate liquidator venue dependencies"
 ```rust
 pub enum RfqSide { Buy, Sell }
 pub struct RfqQuote {
-    transaction: arch_sdk_propamm::RuntimeTransaction,
+    transaction: arch_sdk::RuntimeTransaction,
     pub side: RfqSide,
     pub amount_in: u64,
     pub estimated_out: u64,
@@ -163,7 +162,7 @@ cargo test -p autara-liquidator propamm:: -- --nocapture
 #[derive(Deserialize)]
 struct QuoteResponse {
     #[serde(flatten)]
-    transaction: arch_sdk_propamm::RuntimeTransaction,
+    transaction: arch_sdk::RuntimeTransaction,
     estimated_quote: EstimatedQuote,
 }
 #[derive(Serialize)]
@@ -181,7 +180,7 @@ Reuse one HTTP client. Validate `/health` program ID and cache `/markets` plus t
 
 - [ ] **Step 5: Implement strict message validation**
 
-Decode the single instruction with `parse_instruction`; resolve compiled indices; recompute ATAs/user nonce; require exact account order/flags; require min-out at least estimate minus slippage.
+Decode the single instruction with a bot-local Borsh mirror of the deployed PropAMM `ExecuteTrade` wire format; resolve compiled indices; recompute ATAs/user nonce; require exact account order/flags; require min-out at least estimate minus slippage. Maintain byte-for-byte fixture tests against the sibling PropAMM generated instruction.
 
 - [ ] **Step 6: Verify green and commit**
 
@@ -220,7 +219,7 @@ cargo test -p autara-liquidator propamm::tests::execute -- --nocapture
 
 - [ ] **Step 3: Implement signing/submission**
 
-Reconstruct a temporary `bitcoin_propamm::key::Keypair` from liquidator secret bytes, sign `message.hash()` with `sign_message_bip322`, attach exactly one signature, and POST the identical transaction until success or expiry headroom. Never broadcast locally.
+Sign `message.hash()` with lending's compatible BIP322 signer, attach exactly one signature, and POST the identical transaction until success or expiry headroom. Never broadcast locally.
 
 - [ ] **Step 4: Verify green and commit**
 
@@ -264,7 +263,7 @@ cargo test -p autara-liquidator router::tests -- --nocapture
 
 - [ ] **Step 3: Implement the compatibility boundary**
 
-Use lending's `AsyncArchRpcClient` to load the configured pool, five tick-array candidates, mint owners, vaults, and liquidator ATAs. Decode the current wire layouts locally, pass facade values into `whirlpool-core::swap_quote_by_input_token`, derive the current oracle/tick-array PDAs, and serialize one current SwapV2 callback using lending-native types. Reject wrong program/config/mints, zero active liquidity/output, insufficient standing input balance, or mismatched derived accounts.
+Use lending's `AsyncArchRpcClient` to load the configured pool, five tick-array candidates, mint owners, and vaults. Decode the current wire layouts locally, pass facade values into `whirlpool-core::swap_quote_by_input_token`, derive the current oracle/tick-array PDAs, and serialize one current SwapV2 callback using lending-native types. Reject wrong program/config/mints, zero active liquidity/output, or mismatched derived accounts. Do not require standing collateral inventory: the atomic lending callback receives it first.
 
 - [ ] **Step 4: Verify green and commit**
 

@@ -123,10 +123,11 @@ Configuration retains only public service and safety information:
 ```
 
 The old `quote_signer_keypair`, PropAMM config account, vault addresses, decimal
-copies, local price calculation, replicated quote/instruction definitions, and
-direct broadcast path are removed. The quote-signer public identifier obtained
-from service metadata is used to validate the required signer set; no
-quote-signer secret or keypair path is permitted in bot configuration.
+copies, local price calculation, and direct broadcast path are removed. The bot
+keeps only a small Borsh mirror needed to decode and validate the deployed
+`ExecuteTrade` wire data. The quote-signer public identifier obtained from
+service metadata is used to validate the required signer set; no quote-signer
+secret or keypair path is permitted in bot configuration.
 
 ### CLAMM adapter
 
@@ -149,13 +150,11 @@ instruction locally. These wire definitions are frozen by fixture tests against
 the current CLAMM generated client. The adapter verifies that the callback
 targets the expected CLAMM program and pool before handing it to the scanner.
 
-The initial implementation retains the existing operational requirement that,
-for each CLAMM opportunity, the liquidator's input-token ATA has standing
-balance at least equal to the quoted input. The SDK currently ignores its
-`quote_only` argument and performs this input-balance check even though the
-atomic liquidation supplies that input before the callback executes. Removing
-this artificial float requirement is a separate CLAMM SDK improvement, not part
-of this update.
+The compatibility adapter quotes directly from pool and tick-array state, so it
+does not impose the high-level SDK's artificial standing input-balance check.
+The lending transaction idempotently creates the liquidator ATAs before the
+liquidation, and the seized collateral is available when the atomic callback
+executes.
 
 Only the swap instruction may be embedded as the lending callback. If the SDK
 returns ATA setup or cleanup instructions, the adapter must either prove the
@@ -165,18 +164,16 @@ instruction list.
 
 ### Version isolation
 
-The binary may contain multiple semver-incompatible Arch dependency versions:
+The executable remains entirely on lending-native Arch `0.6.2`. Cargo cannot
+resolve PropAMM's exact `bitcoin 0.32.7` beside lending's exact `0.32.5`, so the
+bot does not import the PropAMM program or Arch `0.7.0` SDK crates. The RFQ JSON
+transaction schema and deployed Borsh instruction wire are decoded with
+`0.6.2` types plus a small local mirror, covered by byte fixtures from the
+current sibling PropAMM checkout.
 
-- lending-native `0.6.2` types for the scanner and lending transactions;
-- PropAMM-compatible `0.7.0` transaction types or explicit JSON wire DTOs inside
-  the RFQ client.
-
-The CLAMM adapter remains on lending-native `0.6.2` and depends only on the
-Arch-independent `whirlpool-core` math crate from the current CLAMM checkout.
-PropAMM dependencies use clear Cargo aliases where direct access is needed. No
-public function in the PropAMM module may expose `0.7.0` Arch types to the
-scanner. Conversion is explicit by fixed-size byte arrays and serialized
-instruction/message data; unsafe transmutation is prohibited.
+The CLAMM adapter likewise remains on lending-native `0.6.2` and depends only
+on the Arch-independent `whirlpool-core` math crate from the current CLAMM
+checkout. Unsafe transmutation is prohibited.
 
 ## Execution Flows
 
@@ -278,14 +275,12 @@ must never be logged.
 At startup the bot verifies:
 
 - the configured lending program and market accounts are readable;
-- the liquidator key and required debt/collateral ATAs are present;
+- the liquidator key is readable; missing token ATAs can be created
+  idempotently by the liquidation transaction;
 - PropAMM `/health` is ready and `/markets` contains the configured mint pair;
 - PropAMM service metadata matches the expected program ID;
 - the configured CLAMM pool belongs to the expected program/config and mint pair;
-- CLAMM has active liquidity and nonzero relevant vault balances;
-- the CLAMM input ATA exists. The quote-specific standing-balance requirement is
-  checked for each opportunity; an insufficient float disables only that quote
-  and produces a clear warning.
+- CLAMM has active liquidity and nonzero relevant vault balances.
 
 Readiness is venue-specific. A failed PropAMM check does not disable CLAMM, and a
 failed CLAMM check does not disable PropAMM. The scanner may start if lending is

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use arch_sdk::arch_program::{
-    bitcoin::{key::Keypair, Network},
+    bitcoin::{Network, key::Keypair},
     pubkey::Pubkey,
 };
 use clap::Parser;
@@ -18,6 +18,7 @@ pub struct Args {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LiquidatorConfig {
     /// RPC URL for the Arch node
     pub rpc_url: String,
@@ -25,8 +26,6 @@ pub struct LiquidatorConfig {
     pub autara_program_id: String,
     /// Path to the liquidator keypair file
     pub liquidator_keypair: String,
-    /// Whirlpools config address (hex). If omitted, uses the default.
-    pub whirlpools_config: Option<String>,
     /// Bitcoin network for signing. One of: "regtest", "testnet", "signet", "bitcoin".
     #[serde(default = "default_network")]
     pub network: String,
@@ -45,64 +44,50 @@ pub struct LiquidatorConfig {
     /// quotes both CLAMM and PropAMM per liquidation and routes to the higher output.
     #[serde(default)]
     pub propamm: Option<PropAmmConfig>,
-    /// Optional explicit CLAMM pools (all pubkeys hex). Pinned pairs skip on-chain
-    /// pool discovery, which is required on RPC nodes where the program-accounts
-    /// scan behind fetch_whirlpools_by_token_pair fails (e.g. mainnet).
+    /// Optional CLAMM venue. Program, config, slippage, and pools are all
+    /// deployment-specific so one executable can serve every network.
     #[serde(default)]
-    pub clamm_pools: Vec<ClammPoolConfig>,
+    pub clamm: Option<ClammConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClammConfig {
+    pub program_id: String,
+    pub config_pubkey: String,
+    #[serde(default = "default_slippage_bps")]
+    pub slippage_bps: u16,
+    #[serde(default)]
+    pub pools: Vec<ClammPoolConfig>,
 }
 
 /// An explicit CLAMM whirlpool for a token pair (all pubkeys hex).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClammPoolConfig {
     pub pool: String,
     pub token_a: String,
     pub token_b: String,
 }
 
-/// PropAMM venue configuration (all pubkeys hex). See prop-amm/deployments.testnet.json.
-#[derive(Debug, Deserialize)]
+/// Public-only PropAMM RFQ service configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PropAmmConfig {
-    pub program_id: String,
-    pub config_pubkey: String,
-    /// Path to the quote_signer keypair (must co-sign every PropAMM swap).
-    pub quote_signer_keypair: String,
-    pub base_mint: String,
-    pub quote_mint: String,
-    pub base_vault: String,
-    pub quote_vault: String,
-    pub base_decimals: u32,
-    pub quote_decimals: u32,
-    pub backend_url: String,
+    pub base_url: String,
+    pub expected_program_id: String,
+    #[serde(default = "default_slippage_bps")]
+    pub slippage_bps: u16,
+    #[serde(default = "default_request_timeout_ms")]
+    pub request_timeout_ms: u64,
+    #[serde(default = "default_minimum_expiry_headroom_ms")]
+    pub minimum_expiry_headroom_ms: u64,
 }
 
 impl LiquidatorConfig {
     pub fn load_keypair(&self) -> Result<(Keypair, Pubkey)> {
         arch_sdk::with_secret_key_file(&self.liquidator_keypair)
             .context("failed to load liquidator keypair")
-    }
-
-    /// Build the PropAMM venue client if configured.
-    pub fn build_propamm(&self) -> Result<Option<crate::propamm::PropAmm>> {
-        let Some(c) = &self.propamm else {
-            return Ok(None);
-        };
-        let (quote_signer_kp, quote_signer_pk) =
-            arch_sdk::with_secret_key_file(&c.quote_signer_keypair)
-                .context("failed to load propamm quote_signer keypair")?;
-        Ok(Some(crate::propamm::PropAmm {
-            program_id: parse_hex_pubkey(&c.program_id)?,
-            config_pubkey: parse_hex_pubkey(&c.config_pubkey)?,
-            quote_signer_kp,
-            quote_signer_pk,
-            base_mint: parse_hex_pubkey(&c.base_mint)?,
-            quote_mint: parse_hex_pubkey(&c.quote_mint)?,
-            base_vault: parse_hex_pubkey(&c.base_vault)?,
-            quote_vault: parse_hex_pubkey(&c.quote_vault)?,
-            base_decimals: c.base_decimals,
-            quote_decimals: c.quote_decimals,
-            backend_url: c.backend_url.clone(),
-        }))
     }
 
     pub fn parse_network(&self) -> Result<Network> {
@@ -125,9 +110,24 @@ fn default_network() -> String {
     "regtest".to_string()
 }
 
+fn default_slippage_bps() -> u16 {
+    100
+}
+
+fn default_request_timeout_ms() -> u64 {
+    8_000
+}
+
+fn default_minimum_expiry_headroom_ms() -> u64 {
+    3_000
+}
+
 pub fn parse_hex_pubkey(hex_str: &str) -> Result<Pubkey> {
     let bytes = hex::decode(hex_str).context("invalid hex for pubkey")?;
-    Ok(Pubkey::from_slice(&bytes))
+    let bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        anyhow::anyhow!("pubkey must be 32 bytes, got {}", bytes.len())
+    })?;
+    Ok(Pubkey::from(bytes))
 }
 
 /// Optional token filter that restricts which markets/tokens the liquidator considers.
@@ -167,5 +167,95 @@ impl TokenFilter {
         } else {
             tokens.intersection(&self.tokens).copied().collect()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LiquidatorConfig, PropAmmConfig, parse_hex_pubkey};
+
+    const PROGRAM_ID: &str = "7a68831501d3a9806feff162e82815a36e1732964a2edd2b461faf69575c3628";
+
+    #[test]
+    fn public_rfq_config_uses_safe_defaults() {
+        let json = format!(
+            r#"{{
+                "base_url": "https://propamm.arch.network/testnet",
+                "expected_program_id": "{PROGRAM_ID}"
+            }}"#
+        );
+
+        let config: PropAmmConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(config.slippage_bps, 100);
+        assert_eq!(config.request_timeout_ms, 8_000);
+        assert_eq!(config.minimum_expiry_headroom_ms, 3_000);
+    }
+
+    #[test]
+    fn public_rfq_config_rejects_quote_signer_secret() {
+        let json = format!(
+            r#"{{
+                "base_url": "https://propamm.arch.network/testnet",
+                "expected_program_id": "{PROGRAM_ID}",
+                "__legacy_field__": "keys/propamm-quote-signer.key",
+                "program_id": "{PROGRAM_ID}",
+                "config_pubkey": "{PROGRAM_ID}",
+                "base_mint": "{PROGRAM_ID}",
+                "quote_mint": "{PROGRAM_ID}",
+                "base_vault": "{PROGRAM_ID}",
+                "quote_vault": "{PROGRAM_ID}",
+                "base_decimals": 8,
+                "quote_decimals": 6,
+                "backend_url": "https://propamm.arch.network/testnet"
+            }}"#
+        )
+        .replace("__legacy_field__", concat!("quote_", "signer_keypair"));
+
+        assert!(serde_json::from_str::<PropAmmConfig>(&json).is_err());
+    }
+
+    #[test]
+    fn top_level_config_rejects_legacy_or_misspelled_deployment_fields() {
+        let json = format!(
+            r#"{{
+                "rpc_url": "https://rpc.testnet.arch.network",
+                "autara_program_id": "{PROGRAM_ID}",
+                "liquidator_keypair": "/path/to/liquidator.key",
+                "network": "testnet",
+                "whirlpools_config": "{PROGRAM_ID}"
+            }}"#
+        );
+
+        assert!(serde_json::from_str::<LiquidatorConfig>(&json).is_err());
+    }
+
+    #[test]
+    fn pubkey_parser_rejects_wrong_lengths_without_panicking() {
+        assert!(parse_hex_pubkey("00").is_err());
+        assert!(parse_hex_pubkey(&"00".repeat(33)).is_err());
+        assert!(parse_hex_pubkey(PROGRAM_ID).is_ok());
+    }
+
+    #[test]
+    fn mainnet_and_testnet_examples_use_the_same_schema_and_key_path() {
+        let mainnet: LiquidatorConfig =
+            serde_json::from_str(include_str!("../liquidator-config.example.json")).unwrap();
+        let testnet: LiquidatorConfig =
+            serde_json::from_str(include_str!("../liquidator-config.testnet.example.json"))
+                .unwrap();
+
+        assert_eq!(mainnet.network, "mainnet");
+        assert_eq!(testnet.network, "testnet");
+        assert_eq!(mainnet.liquidator_keypair, testnet.liquidator_keypair);
+        assert_ne!(mainnet.rpc_url, testnet.rpc_url);
+        assert_ne!(
+            mainnet.propamm.unwrap().expected_program_id,
+            testnet.propamm.unwrap().expected_program_id
+        );
+        assert_ne!(
+            mainnet.clamm.unwrap().config_pubkey,
+            testnet.clamm.unwrap().config_pubkey
+        );
     }
 }
