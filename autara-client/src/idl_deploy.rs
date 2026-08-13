@@ -44,8 +44,34 @@ pub fn explorer_tx(txid: &Hash) -> String {
     )
 }
 
+/// Retry `op` on error with linear backoff. Transient RPC failures (connection
+/// resets under the ~800-tx write storm) must not abort an upgrade midway —
+/// loader `write`s are idempotent, so resubmitting a batch is always safe.
+async fn with_retries<T, F, Fut>(label: &str, mut op: F) -> anyhow::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    const ATTEMPTS: u32 = 4;
+    let mut last = None;
+    for attempt in 1..=ATTEMPTS {
+        match op().await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                println!("        {label}: attempt {attempt}/{ATTEMPTS} failed: {e}");
+                last = Some(e);
+                tokio::time::sleep(std::time::Duration::from_secs(2 * attempt as u64)).await;
+            }
+        }
+    }
+    Err(last.unwrap())
+}
+
 async fn confirm(client: &AsyncArchRpcClient, txid: &Hash) -> anyhow::Result<()> {
-    let tx = client.wait_for_processed_transaction(txid).await.map_err(de)?;
+    let tx = with_retries("confirm", || async {
+        client.wait_for_processed_transaction(txid).await.map_err(de)
+    })
+    .await?;
     if let Status::Failed(reason) = tx.status {
         anyhow::bail!("tx {txid} failed: {reason}");
     }
@@ -183,7 +209,11 @@ pub async fn upgrade_in_place(
     println!("    {} write txs (chunk_size={})", txs.len(), chunk_size);
     let mut ids = Vec::new();
     for batch in txs.chunks(MAX_TX_BATCH_SIZE) {
-        ids.extend(client.send_transactions(batch.to_vec()).await.map_err(de)?);
+        let batch_ids = with_retries("send write batch", || async {
+            client.send_transactions(batch.to_vec()).await.map_err(de)
+        })
+        .await?;
+        ids.extend(batch_ids);
     }
     for txid in &ids {
         confirm(client, txid).await?;
