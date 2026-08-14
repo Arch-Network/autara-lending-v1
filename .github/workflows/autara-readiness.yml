@@ -1,0 +1,270 @@
+# Autara pre-upgrade readiness (manual).
+#
+# Runs the checklist sections that should pass BEFORE a program/oracle upgrade:
+#   1) unit + integration tests
+#   2) live shared_loss_flow (always against stage/testnet disposable market)
+#   3) e2e lending flow (testnet faucet/mint OR mainnet-safe pre-funded)
+#   4) optional oracle pusher /health probe
+#
+# Does NOT deploy or upgrade. Use `autara-release` to chain this into an upgrade
+# dry-run (and optionally a gated real upgrade).
+#
+# Modes:
+#   testnet       — e2e uses faucet + mint authorities (AUTARA_E2E_* secrets)
+#   mainnet-safe  — e2e uses E2E_SKIP_MINT=1 against mainnet IDs; requires a
+#                   pre-funded user key secret. Shared-loss live proof still
+#                   runs on stage/testnet (creates a disposable market).
+
+name: autara-readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Readiness mode'
+        type: choice
+        required: true
+        options:
+          - testnet
+          - mainnet-safe
+        default: testnet
+      probe_pusher_health:
+        description: 'If set, curl this pusher /health URL (optional)'
+        type: string
+        required: false
+        default: ''
+  workflow_call:
+    inputs:
+      mode:
+        description: 'Readiness mode'
+        type: string
+        required: true
+      probe_pusher_health:
+        description: 'Optional pusher /health URL'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    # mainnet-safe needs the mainnet Environment for funded-user / market vars.
+    # testnet uses the testnet Environment for mint-authority secrets.
+    environment: ${{ inputs.mode == 'mainnet-safe' && 'mainnet' || 'testnet' }}
+    env:
+      MODE: ${{ inputs.mode }}
+      PROBE_PUSHER_HEALTH: ${{ inputs.probe_pusher_health }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.85.1
+        uses: dtolnay/rust-toolchain@1.85.1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Unit + integration tests
+        run: |
+          set -euo pipefail
+          cargo test -p autara-lib --lib
+          cargo test -p autara-program --lib
+          cargo test -p autara-integration-tests -- --nocapture
+          cargo test -p autara-integration-tests socialize_loss -- --nocapture
+
+      # Live socialization proof always uses the disposable stage market harness
+      # (never touches shared aUSD/aBTC). Safe as a pre-mainnet gate.
+      - name: Shared loss live flow (stage/testnet)
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/shared_loss_flow.log"
+          cargo run -p autara-client --example shared_loss_flow 2>&1 | tee "$OUT"
+          grep -q 'FINAL VERDICT: PASS' "$OUT"
+          echo "SHARED_LOSS_LOG=$OUT" >> "$GITHUB_ENV"
+
+      - name: Decode e2e keys (testnet mint authorities)
+        if: ${{ inputs.mode == 'testnet' }}
+        env:
+          AUSD_B64: ${{ secrets.AUTARA_E2E_AUSD_AUTHORITY_B64 }}
+          ABTC_B64: ${{ secrets.AUTARA_E2E_ABTC_AUTHORITY_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          KEYS="$RUNNER_TEMP/keys"
+          mkdir -p "$KEYS"
+          if [ -z "${AUSD_B64:-}" ] || [ -z "${ABTC_B64:-}" ]; then
+            echo "::error::Missing AUTARA_E2E_AUSD_AUTHORITY_B64 / AUTARA_E2E_ABTC_AUTHORITY_B64." >&2
+            exit 1
+          fi
+          printf '%s' "$AUSD_B64" | base64 -d > "$KEYS/aUSD-authority.json"
+          printf '%s' "$ABTC_B64" | base64 -d > "$KEYS/aBTC-authority.json"
+          chmod 600 "$KEYS/aUSD-authority.json" "$KEYS/aBTC-authority.json"
+          {
+            echo "E2E_AUSD_AUTHORITY=$KEYS/aUSD-authority.json"
+            echo "E2E_ABTC_AUTHORITY=$KEYS/aBTC-authority.json"
+          } >> "$GITHUB_ENV"
+
+      - name: Decode e2e user key (mainnet-safe pre-funded)
+        if: ${{ inputs.mode == 'mainnet-safe' }}
+        env:
+          USER_B64: ${{ secrets.AUTARA_E2E_MAINNET_USER_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          KEYS="$RUNNER_TEMP/keys"
+          mkdir -p "$KEYS"
+          if [ -z "${USER_B64:-}" ]; then
+            echo "::error::Missing AUTARA_E2E_MAINNET_USER_KEY_B64 (pre-funded mainnet user)." >&2
+            exit 1
+          fi
+          printf '%s' "$USER_B64" | base64 -d > "$KEYS/mainnet-user.key"
+          chmod 600 "$KEYS/mainnet-user.key"
+          echo "E2E_USER_KEY=$KEYS/mainnet-user.key" >> "$GITHUB_ENV"
+          echo "E2E_SKIP_MINT=1" >> "$GITHUB_ENV"
+
+      - name: Generate throwaway testnet user key
+        if: ${{ inputs.mode == 'testnet' }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/e2e"
+          openssl rand -hex 32 | tr -d '\n' > "$RUNNER_TEMP/e2e/user.key"
+          echo "E2E_USER_KEY=$RUNNER_TEMP/e2e/user.key" >> "$GITHUB_ENV"
+
+      - name: Configure e2e targets
+        env:
+          # Optional Environment variables override the baked-in defaults.
+          VAR_E2E_RPC: ${{ vars.E2E_RPC }}
+          VAR_E2E_NETWORK: ${{ vars.E2E_NETWORK }}
+          VAR_E2E_PROGRAM_ID: ${{ vars.E2E_PROGRAM_ID }}
+          VAR_E2E_MARKET: ${{ vars.E2E_MARKET }}
+          VAR_E2E_AUSD_MINT: ${{ vars.E2E_AUSD_MINT }}
+          VAR_E2E_ABTC_MINT: ${{ vars.E2E_ABTC_MINT }}
+          VAR_ORACLE_PROGRAM_ID: ${{ vars.ORACLE_PROGRAM_ID }}
+          VAR_ORACLE_FEEDS: ${{ vars.ORACLE_FEEDS }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "testnet" ]; then
+            {
+              echo "E2E_RPC=${VAR_E2E_RPC:-https://rpc.testnet.arch.network}"
+              echo "E2E_NETWORK=${VAR_E2E_NETWORK:-testnet4}"
+              echo "E2E_PROGRAM_ID=${VAR_E2E_PROGRAM_ID:-34cf72a92dd76322a42f13f99e51cf7c03221f4adbd4ee7e0c409c4161dfe20c}"
+              echo "E2E_MARKET=${VAR_E2E_MARKET:-d8d679b946aafb22322f477cd5f196700f181aa3f712ca09e486fc77cedc0cce}"
+              echo "E2E_AUSD_MINT=${VAR_E2E_AUSD_MINT:-8ec480c6e5458e7d37dc2a9f7d7d149a02d8182a38523b037905203ff36b71f6}"
+              echo "E2E_ABTC_MINT=${VAR_E2E_ABTC_MINT:-627ecd24366c89314b12aa08a1b2fffc3890cb9cf64fb04fe3e95c7182b23dfb}"
+              echo "ORACLE_PROGRAM_ID=${VAR_ORACLE_PROGRAM_ID:-8d24068aa026fd2e6ccca6e7b64a944b0e384df279b15f599ddd4a5285d592e8}"
+              echo "ORACLE_FEEDS=${VAR_ORACLE_FEEDS:-0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a}"
+            } >> "$GITHUB_ENV"
+          else
+            # mainnet-safe: require Environment vars for live market targets.
+            for req in VAR_E2E_PROGRAM_ID VAR_E2E_MARKET VAR_E2E_AUSD_MINT VAR_E2E_ABTC_MINT VAR_ORACLE_PROGRAM_ID; do
+              if [ -z "${!req:-}" ]; then
+                echo "::error::mainnet-safe requires GitHub Environment var ${req#VAR_} on 'mainnet'." >&2
+                exit 1
+              fi
+            done
+            {
+              echo "E2E_RPC=${VAR_E2E_RPC:-https://rpc.mainnet.arch.network}"
+              echo "E2E_NETWORK=${VAR_E2E_NETWORK:-mainnet}"
+              echo "E2E_PROGRAM_ID=$VAR_E2E_PROGRAM_ID"
+              echo "E2E_MARKET=$VAR_E2E_MARKET"
+              echo "E2E_AUSD_MINT=$VAR_E2E_AUSD_MINT"
+              echo "E2E_ABTC_MINT=$VAR_E2E_ABTC_MINT"
+              echo "ORACLE_PROGRAM_ID=$VAR_ORACLE_PROGRAM_ID"
+              echo "ORACLE_FEEDS=${VAR_ORACLE_FEEDS:-}"
+            } >> "$GITHUB_ENV"
+          fi
+
+      - name: Build pusher + e2e example
+        run: |
+          set -euo pipefail
+          cargo build --release -p autara-pyth
+          cargo build -p autara-client --example e2e_flow
+
+      - name: Start Pyth pusher (testnet only)
+        if: ${{ inputs.mode == 'testnet' }}
+        run: |
+          set -euo pipefail
+          LOG="$RUNNER_TEMP/pusher.log"
+          : > "$LOG"
+          echo "PUSHER_LOG=$LOG" >> "$GITHUB_ENV"
+          ./target/release/autara-pyth \
+            --rpc "$E2E_RPC" \
+            --network testnet \
+            --program-id "$ORACLE_PROGRAM_ID" \
+            --feeds "$ORACLE_FEEDS" \
+            > "$LOG" 2>&1 &
+          PUSHER_PID=$!
+          echo "PUSHER_PID=$PUSHER_PID" >> "$GITHUB_ENV"
+          echo "Pusher started (pid=$PUSHER_PID); waiting up to 60s for it to push..."
+          for i in $(seq 1 60); do
+            if ! kill -0 "$PUSHER_PID" 2>/dev/null; then
+              echo "::error::Pusher process exited early. Log:" >&2
+              cat "$LOG" >&2
+              exit 1
+            fi
+            if grep -q "Sending" "$LOG"; then
+              echo "Pusher is pushing prices (after ${i}s)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Pusher never logged a 'Sending' within 60s. Log:" >&2
+          cat "$LOG" >&2
+          exit 1
+
+      - name: Run e2e lending flow
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/e2e_output.log"
+          echo "E2E_OUTPUT=$OUT" >> "$GITHUB_ENV"
+          set +e
+          cargo run -p autara-client --example e2e_flow 2>&1 | tee "$OUT"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "example exit code: $rc"
+          grep -q 'FINAL VERDICT: PASS' "$OUT" || exit "$rc"
+          exit "$rc"
+
+      - name: Stop Pyth pusher
+        if: ${{ always() && inputs.mode == 'testnet' }}
+        run: |
+          set -uo pipefail
+          if [ -n "${PUSHER_PID:-}" ]; then
+            kill "$PUSHER_PID" 2>/dev/null || true
+          fi
+          pkill -f 'target/release/autara-pyth' 2>/dev/null || true
+
+      - name: Probe pusher /health (optional)
+        if: ${{ inputs.probe_pusher_health != '' }}
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 15 "$PROBE_PUSHER_HEALTH"
+          echo
+          echo "Pusher health OK: $PROBE_PUSHER_HEALTH"
+
+      - name: Write readiness summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Autara readiness — \`${MODE}\`"
+            echo ""
+            echo "- mode: \`${MODE}\`"
+            echo "- commit: \`${GITHUB_SHA}\`"
+            echo "- e2e program: \`${E2E_PROGRAM_ID:-n/a}\`"
+            echo "- e2e market: \`${E2E_MARKET:-n/a}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload readiness logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autara-readiness-${{ inputs.mode }}
+          path: |
+            ${{ runner.temp }}/shared_loss_flow.log
+            ${{ runner.temp }}/e2e_output.log
+            ${{ runner.temp }}/pusher.log
+          if-no-files-found: warn

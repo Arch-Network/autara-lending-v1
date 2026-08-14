@@ -168,12 +168,19 @@ Follow these steps in order. Steps 1–6 are operational prerequisites that
    printed addresses, the resolved `market_params:`, the program-id guard
    (`program_id_guard: ok`), and the `mainnet_guard: ok` line. A dry-run sends
    **nothing** and skips the gates' teeth.
-8. **Real run, in order.** Only after the dry-runs look correct, re-dispatch with
+8. **Pre-upgrade readiness (recommended).** Before any upgrade, run
+   `autara-readiness` (or locally `./scripts/readiness.sh testnet|mainnet-safe`).
+   Prefer the chained **`autara-release`** workflow: readiness → program+oracle
+   upgrade dry-run → optional real upgrade. For mainnet, set
+   `readiness_mode=mainnet-safe` (pre-funded user; `E2E_SKIP_MINT=1`) and only
+   set `run_real_upgrade=true` after reviewing artifacts; real mainnet still
+   requires `mainnet_confirm=DEPLOY MAINNET`.
+9. **Real run, in order.** Only after the dry-runs look correct, re-dispatch with
    `dry_run=false` **and** `mainnet_confirm=DEPLOY MAINNET`, approving the
    Environment review when prompted. Order: `autara-deploy` (program + oracle) →
    `autara-initialize` (global config) → `autara-setup-markets` (token setup +
-   markets). Use `autara-upgrade` for in-place program upgrades (program id /
-   `autara_program::id()` unchanged).
+   markets). Use `autara-upgrade` / `autara-release` for in-place **program +
+   oracle** upgrades (ids unchanged).
 
 > **Upgrade-authority custody.** The deployer key is the program upgrade
 > authority (it signs the on-chain re-upload for `autara-upgrade`). Guard it like
