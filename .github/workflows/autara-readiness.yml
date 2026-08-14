@@ -140,6 +140,10 @@ jobs:
       # retrying starts from clean state rather than resuming a half-done flow.
       - name: Shared loss live flow (stage/testnet)
         run: |
+          # GitHub invokes this step as `bash -e`, so errexit must be cleared
+          # explicitly or the first failed attempt kills the step and the retry
+          # loop below never runs.
+          set +e
           set -uo pipefail
           OUT="$RUNNER_TEMP/shared_loss_flow.log"
           echo "SHARED_LOSS_LOG=$OUT" >> "$GITHUB_ENV"
