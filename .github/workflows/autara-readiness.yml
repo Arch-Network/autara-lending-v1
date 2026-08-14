@@ -66,44 +66,127 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Unit + integration tests
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      # keys/ is gitignored since #44, but autara-client still resolves the stage
+      # program, oracle and admin from those paths, so the integration suite and
+      # shared_loss_flow cannot construct a fixture without them. These are the
+      # legacy stage keys for the existing testnet deployment; they are not the
+      # .keys-testnet deploy roles (PROGRAM_KEYPAIR_B64 & co).
+      - name: Restore stage keypairs
+        env:
+          STAGE_PROGRAM_B64: ${{ secrets.AUTARA_STAGE_PROGRAM_KEY_B64 }}
+          STAGE_ORACLE_B64: ${{ secrets.AUTARA_STAGE_ORACLE_KEY_B64 }}
+          STAGE_ADMIN_B64: ${{ secrets.AUTARA_STAGE_ADMIN_KEY_B64 }}
+          ORACLE_SIGNER_B64: ${{ secrets.AUTARA_ORACLE_SIGNER_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p keys
+          restore() {
+            local b64="$1" dest="$2" name="$3"
+            if [ -z "$b64" ]; then
+              echo "::error::Missing secret $name. The integration suite needs the stage keypairs; see docs/key-hygiene.md." >&2
+              exit 1
+            fi
+            printf '%s' "$b64" | base64 -d > "$dest"
+            chmod 600 "$dest"
+            # Stage keys are 32-byte secrets stored as 64 hex chars, no trailing
+            # newline. A wrong-sized file means the secret was pasted or encoded
+            # incorrectly, which would otherwise fail deep inside a test.
+            local size
+            size=$(wc -c < "$dest" | tr -d ' ')
+            if [ "$size" -ne 64 ]; then
+              echo "::error::$name decoded to $size bytes, expected 64. Re-encode with: base64 -i keys/<file>" >&2
+              exit 1
+            fi
+          }
+          restore "${STAGE_PROGRAM_B64:-}" keys/autara-stage.key AUTARA_STAGE_PROGRAM_KEY_B64
+          restore "${STAGE_ORACLE_B64:-}" keys/autara-pyth-stage.key AUTARA_STAGE_ORACLE_KEY_B64
+          restore "${STAGE_ADMIN_B64:-}" keys/autara-admin-stage.key AUTARA_STAGE_ADMIN_KEY_B64
+          # The oracle binds each feed to whichever signer created it, and the
+          # live aUSD/aBTC feeds belong to this key. Pushing with anything else
+          # is rejected with "Incorrect authority provided".
+          restore "${ORACLE_SIGNER_B64:-}" keys/autara-cli-signer.key AUTARA_ORACLE_SIGNER_KEY_B64
+          echo "Restored 4 stage keypairs into keys/"
+
+      - name: Unit tests (offline)
         run: |
           set -euo pipefail
           cargo test -p autara-lib --lib
           cargo test -p autara-program --lib
-          cargo test -p autara-integration-tests -- --nocapture
-          cargo test -p autara-integration-tests socialize_loss -- --nocapture
+
+      # The integration suite runs against LIVE Arch testnet: every test faucets
+      # accounts and creates a fresh market + oracle feeds, so individual cases
+      # intermittently see "Account not found" / "market not found" while state
+      # propagates on the RPC node. Retries absorb that; a real regression still
+      # fails every attempt. Mirrors `make program-test` (nextest, no-fail-fast).
+      #
+      # Retry count and backoff come from .config/nextest.toml. Do not pass
+      # --retries or set NEXTEST_RETRIES here: both override the profile and drop
+      # the backoff, which is the part that actually makes retrying work.
+      - name: Integration tests (live testnet)
+        run: |
+          set -euo pipefail
+          cargo nextest run --no-fail-fast -p autara-integration-tests
 
       # Live socialization proof always uses the disposable stage market harness
       # (never touches shared aUSD/aBTC). Safe as a pre-mainnet gate.
+      # Its setup phase faucets keypairs and creates oracle feeds, so it hits the
+      # same testnet propagation lag the integration suite retries around — but
+      # as a plain `cargo run` it got no retry and failed the whole gate on one
+      # "Account not found". Each attempt builds its own disposable market, so
+      # retrying starts from clean state rather than resuming a half-done flow.
       - name: Shared loss live flow (stage/testnet)
         run: |
-          set -euo pipefail
+          # GitHub invokes this step as `bash -e`, so errexit must be cleared
+          # explicitly or the first failed attempt kills the step and the retry
+          # loop below never runs.
+          set +e
+          set -uo pipefail
           OUT="$RUNNER_TEMP/shared_loss_flow.log"
-          cargo run -p autara-client --example shared_loss_flow 2>&1 | tee "$OUT"
-          grep -q 'FINAL VERDICT: PASS' "$OUT"
           echo "SHARED_LOSS_LOG=$OUT" >> "$GITHUB_ENV"
+          for attempt in 1 2 3; do
+            echo "== shared_loss_flow attempt $attempt/3 =="
+            cargo run -p autara-client --example shared_loss_flow 2>&1 | tee "$OUT"
+            if grep -q 'FINAL VERDICT: PASS' "$OUT"; then
+              echo "shared_loss_flow passed on attempt $attempt"
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              delay=$((attempt * 15))
+              echo "attempt $attempt did not reach PASS; retrying in ${delay}s"
+              sleep "$delay"
+            fi
+          done
+          echo "::error::shared_loss_flow never reached 'FINAL VERDICT: PASS' in 3 attempts." >&2
+          exit 1
 
-      - name: Decode e2e keys (testnet mint authorities)
+      # e2e used to mint itself tokens, but nobody holds the mint authority for
+      # the live aUSD/aBTC mints, so MintTo fails with "owner does not match".
+      # Use a dedicated pre-funded wallet and E2E_SKIP_MINT=1 instead — the same
+      # path mainnet-safe already takes, since mainnet has no mint authority
+      # either. The flow unwinds every position it opens, so its token balance
+      # only drifts by the interest it pays (about 1 atom per run).
+      - name: Decode e2e user key (testnet pre-funded)
         if: ${{ inputs.mode == 'testnet' }}
         env:
-          AUSD_B64: ${{ secrets.AUTARA_E2E_AUSD_AUTHORITY_B64 }}
-          ABTC_B64: ${{ secrets.AUTARA_E2E_ABTC_AUTHORITY_B64 }}
+          USER_B64: ${{ secrets.AUTARA_E2E_TESTNET_USER_KEY_B64 }}
         run: |
           set -euo pipefail
           umask 077
           KEYS="$RUNNER_TEMP/keys"
           mkdir -p "$KEYS"
-          if [ -z "${AUSD_B64:-}" ] || [ -z "${ABTC_B64:-}" ]; then
-            echo "::error::Missing AUTARA_E2E_AUSD_AUTHORITY_B64 / AUTARA_E2E_ABTC_AUTHORITY_B64." >&2
+          if [ -z "${USER_B64:-}" ]; then
+            echo "::error::Missing AUTARA_E2E_TESTNET_USER_KEY_B64 (pre-funded testnet user)." >&2
             exit 1
           fi
-          printf '%s' "$AUSD_B64" | base64 -d > "$KEYS/aUSD-authority.json"
-          printf '%s' "$ABTC_B64" | base64 -d > "$KEYS/aBTC-authority.json"
-          chmod 600 "$KEYS/aUSD-authority.json" "$KEYS/aBTC-authority.json"
+          printf '%s' "$USER_B64" | base64 -d > "$KEYS/testnet-user.key"
+          chmod 600 "$KEYS/testnet-user.key"
           {
-            echo "E2E_AUSD_AUTHORITY=$KEYS/aUSD-authority.json"
-            echo "E2E_ABTC_AUTHORITY=$KEYS/aBTC-authority.json"
+            echo "E2E_USER_KEY=$KEYS/testnet-user.key"
+            echo "E2E_SKIP_MINT=1"
           } >> "$GITHUB_ENV"
 
       - name: Decode e2e user key (mainnet-safe pre-funded)
@@ -124,15 +207,6 @@ jobs:
           echo "E2E_USER_KEY=$KEYS/mainnet-user.key" >> "$GITHUB_ENV"
           echo "E2E_SKIP_MINT=1" >> "$GITHUB_ENV"
 
-      - name: Generate throwaway testnet user key
-        if: ${{ inputs.mode == 'testnet' }}
-        run: |
-          set -euo pipefail
-          umask 077
-          mkdir -p "$RUNNER_TEMP/e2e"
-          openssl rand -hex 32 | tr -d '\n' > "$RUNNER_TEMP/e2e/user.key"
-          echo "E2E_USER_KEY=$RUNNER_TEMP/e2e/user.key" >> "$GITHUB_ENV"
-
       - name: Configure e2e targets
         env:
           # Optional Environment variables override the baked-in defaults.
@@ -150,11 +224,14 @@ jobs:
             {
               echo "E2E_RPC=${VAR_E2E_RPC:-https://rpc.testnet.arch.network}"
               echo "E2E_NETWORK=${VAR_E2E_NETWORK:-testnet4}"
-              echo "E2E_PROGRAM_ID=${VAR_E2E_PROGRAM_ID:-34cf72a92dd76322a42f13f99e51cf7c03221f4adbd4ee7e0c409c4161dfe20c}"
-              echo "E2E_MARKET=${VAR_E2E_MARKET:-d8d679b946aafb22322f477cd5f196700f181aa3f712ca09e486fc77cedc0cce}"
-              echo "E2E_AUSD_MINT=${VAR_E2E_AUSD_MINT:-8ec480c6e5458e7d37dc2a9f7d7d149a02d8182a38523b037905203ff36b71f6}"
-              echo "E2E_ABTC_MINT=${VAR_E2E_ABTC_MINT:-627ecd24366c89314b12aa08a1b2fffc3890cb9cf64fb04fe3e95c7182b23dfb}"
-              echo "ORACLE_PROGRAM_ID=${VAR_ORACLE_PROGRAM_ID:-8d24068aa026fd2e6ccca6e7b64a944b0e384df279b15f599ddd4a5285d592e8}"
+              # aUSD/aBTC market on the live stage deployment; the previous
+              # defaults pointed at a testnet deployment that no longer exists.
+              # Source of truth: deployments/testnet-ausd-abtc.json (PR #38).
+              echo "E2E_PROGRAM_ID=${VAR_E2E_PROGRAM_ID:-53def2dc8516302842b10e356914d2a5f6b33425ba42aec684f706aa1cf64192}"
+              echo "E2E_MARKET=${VAR_E2E_MARKET:-9a5a237ddb156c367952ea3562ab3d05f3cdaf0e9bf6ba4fb7b76e233e181f53}"
+              echo "E2E_AUSD_MINT=${VAR_E2E_AUSD_MINT:-55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45}"
+              echo "E2E_ABTC_MINT=${VAR_E2E_ABTC_MINT:-1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9}"
+              echo "ORACLE_PROGRAM_ID=${VAR_ORACLE_PROGRAM_ID:-eee682c27db375bebbc17ed9a76aaa935c8b72bc7de50d736f03e2dfbed84b15}"
               echo "ORACLE_FEEDS=${VAR_ORACLE_FEEDS:-0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a}"
             } >> "$GITHUB_ENV"
           else
@@ -177,11 +254,25 @@ jobs:
             } >> "$GITHUB_ENV"
           fi
 
+      - name: Verify e2e targets exist on-chain
+        run: ./scripts/check-e2e-targets.sh
+
       - name: Build pusher + e2e example
         run: |
           set -euo pipefail
           cargo build --release -p autara-pyth
           cargo build -p autara-client --example e2e_flow
+
+      # E2E_SKIP_MINT=1 also skips the faucet, so the persistent wallet would
+      # slowly run out of gas across runs. Top it up from the testnet faucet.
+      - name: Top up e2e user gas (testnet only)
+        if: ${{ inputs.mode == 'testnet' }}
+        run: |
+          set -euo pipefail
+          cargo run -p autara-client --example fund_signer -- \
+            --key "$E2E_USER_KEY" \
+            --rpc "$E2E_RPC" \
+            --network testnet
 
       - name: Start Pyth pusher (testnet only)
         if: ${{ inputs.mode == 'testnet' }}
@@ -190,28 +281,40 @@ jobs:
           LOG="$RUNNER_TEMP/pusher.log"
           : > "$LOG"
           echo "PUSHER_LOG=$LOG" >> "$GITHUB_ENV"
+          # --signer is required: the oracle binds each feed to its creator, so
+          # the default throwaway key cannot update the live feeds.
           ./target/release/autara-pyth \
             --rpc "$E2E_RPC" \
             --network testnet \
             --program-id "$ORACLE_PROGRAM_ID" \
             --feeds "$ORACLE_FEEDS" \
+            --signer keys/autara-cli-signer.key \
             > "$LOG" 2>&1 &
           PUSHER_PID=$!
           echo "PUSHER_PID=$PUSHER_PID" >> "$GITHUB_ENV"
-          echo "Pusher started (pid=$PUSHER_PID); waiting up to 60s for it to push..."
+          echo "Pusher started (pid=$PUSHER_PID); waiting up to 60s for a confirmed push..."
+          # "Sending" only means a transaction was submitted. A pusher signing
+          # with the wrong key logs "Sending" forever while every push is
+          # rejected, and e2e then fails later with a stale-oracle error that
+          # looks unrelated. Wait for a push that is not followed by a failure.
           for i in $(seq 1 60); do
             if ! kill -0 "$PUSHER_PID" 2>/dev/null; then
               echo "::error::Pusher process exited early. Log:" >&2
               cat "$LOG" >&2
               exit 1
             fi
-            if grep -q "Sending" "$LOG"; then
-              echo "Pusher is pushing prices (after ${i}s)"
+            if grep -q "Incorrect authority provided" "$LOG"; then
+              echo "::error::Pusher is not the feed authority — every push is rejected. Check AUTARA_ORACLE_SIGNER_KEY_B64. Log:" >&2
+              cat "$LOG" >&2
+              exit 1
+            fi
+            if grep -q "Sending" "$LOG" && ! grep -q "Transaction failed" "$LOG"; then
+              echo "Pusher is pushing prices successfully (after ${i}s)"
               exit 0
             fi
             sleep 1
           done
-          echo "::error::Pusher never logged a 'Sending' within 60s. Log:" >&2
+          echo "::error::Pusher never landed a successful push within 60s. Log:" >&2
           cat "$LOG" >&2
           exit 1
 

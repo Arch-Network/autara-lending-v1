@@ -134,6 +134,33 @@ async fn submit(
     Err(anyhow!("[{label}] exhausted retries"))
 }
 
+/// Re-read market state until `read` returns `expected`, or give up after ~15s.
+///
+/// A processed transaction is not necessarily visible to the next read: the RPC
+/// node can still serve the pre-transaction account for a moment. Asserting on a
+/// single read turns every post-condition into a race, and on a slow node that
+/// surfaces as a step whose tokens plainly moved but whose position still reports
+/// the old value. Returns the last value read either way, so a genuine mismatch
+/// still fails the assertion rather than hanging.
+async fn settle_until(
+    client: &mut Client,
+    market: &Pubkey,
+    expected: u64,
+    read: impl Fn(&Client, &Pubkey) -> u64,
+) -> Result<u64> {
+    const ATTEMPTS: u32 = 30;
+    let mut value = read(client, market);
+    for _ in 0..ATTEMPTS {
+        if value == expected {
+            return Ok(value);
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        client.reload_authority_accounts_for_market(market).await?;
+        value = read(client, market);
+    }
+    Ok(value)
+}
+
 fn supply_owned(client: &Client, market: &Pubkey) -> u64 {
     match client.get_supply_position(market) {
         Some(sp) => client
@@ -455,6 +482,12 @@ async fn main() -> Result<()> {
     .await;
     let tx4 = handle(tx4, &mut results, "repay")?;
     client.reload_authority_accounts_for_market(&market).await?;
+    settle_until(&mut client, &market, 0, |c, m| {
+        c.get_borrow_position_health(m)
+            .map(|h| h.borrowed_atoms)
+            .unwrap_or(u64::MAX)
+    })
+    .await?;
     let h4 = client.get_borrow_position_health(&market)?;
     let pass4 = h4.borrowed_atoms == 0;
     println!(
@@ -482,6 +515,12 @@ async fn main() -> Result<()> {
     .await;
     let tx5 = handle(tx5, &mut results, "withdraw_collateral")?;
     client.reload_authority_accounts_for_market(&market).await?;
+    settle_until(&mut client, &market, 0, |c, m| {
+        c.get_borrow_position_health(m)
+            .map(|h| h.collateral_atoms)
+            .unwrap_or(u64::MAX)
+    })
+    .await?;
     let h5 = client.get_borrow_position_health(&market)?;
     let pass5 = h5.collateral_atoms == 0;
     println!(
@@ -509,7 +548,7 @@ async fn main() -> Result<()> {
     .await;
     let tx6 = handle(tx6, &mut results, "withdraw_supply")?;
     client.reload_authority_accounts_for_market(&market).await?;
-    let owned6 = supply_owned(&client, &market);
+    let owned6 = settle_until(&mut client, &market, 0, supply_owned).await?;
     let pass6 = owned6 == 0;
     println!(
         "  ASSERT supply owned_atoms == 0 -> {owned6} => {}",
