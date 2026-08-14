@@ -11,7 +11,7 @@
         "name": "Autara Lending",
         "version": "0.1.0",
         "spec": "0.1.0",
-        "description": "Autara lending protocol. Native Arch program; instructions are Borsh-encoded as [1-byte AurataInstructionTag][payload]. Discriminators below are the tag enum's declaration-order indices (autara-lib/src/ixs/types.rs). All 20 instructions are covered. For create_market/update_config, the nested Pod config types (LtvConfig=48B, IFixedPoint=16B, OracleConfig=257B over Borsh; 264B in memory) are represented as opaque fixed-size u8 arrays so byte offsets stay exact while keeping the IDL small; the InterestRateCurveKind enum carries opaque variant payloads (Fixed=16B, Polyline=64B, Adaptive=16B)."
+        "description": "Autara lending protocol. Native Arch program; instructions are Borsh-encoded as [1-byte AurataInstructionTag][payload]. Discriminators below are the tag enum's declaration-order indices (autara-lib/src/ixs/types.rs). All 22 instructions are covered. For create_market/update_config, the nested Pod config types (LtvConfig=48B, IFixedPoint=16B, OracleConfig=257B over Borsh; 264B in memory) are represented as opaque fixed-size u8 arrays so byte offsets stay exact while keeping the IDL small; the InterestRateCurveKind enum carries opaque variant payloads (Fixed=16B, Polyline=64B, Adaptive=16B)."
       },
       "instructions": [
         {
@@ -449,7 +449,12 @@
           "discriminator": [
             11
           ],
-          "accounts": [],
+          "accounts": [
+            {
+              "name": "market",
+              "signer": true
+            }
+          ],
           "args": []
         },
         {
@@ -476,6 +481,9 @@
             },
             {
               "name": "apl_token_program"
+            },
+            {
+              "name": "autara_program"
             }
           ],
           "args": []
@@ -488,7 +496,8 @@
           "accounts": [
             {
               "name": "signer",
-              "signer": true
+              "signer": true,
+              "writable": true
             },
             {
               "name": "global_config"
@@ -507,6 +516,9 @@
             },
             {
               "name": "apl_token_program"
+            },
+            {
+              "name": "autara_program"
             }
           ],
           "args": []
@@ -1008,6 +1020,105 @@
               "type": {
                 "option": "u16"
               }
+            }
+          ]
+        },
+        {
+          "name": "begin_capital_sweep",
+          "discriminator": [
+            20
+          ],
+          "accounts": [
+            {
+              "name": "market",
+              "writable": true
+            },
+            {
+              "name": "borrow_position",
+              "writable": true
+            },
+            {
+              "name": "curator",
+              "signer": true
+            },
+            {
+              "name": "curator_collateral_ata",
+              "writable": true
+            },
+            {
+              "name": "market_collateral_vault",
+              "writable": true
+            },
+            {
+              "name": "apl_token_program"
+            },
+            {
+              "name": "supply_oracle"
+            },
+            {
+              "name": "collateral_oracle"
+            },
+            {
+              "name": "autara_program"
+            }
+          ],
+          "args": []
+        },
+        {
+          "name": "settle_capital_sweep",
+          "discriminator": [
+            21
+          ],
+          "accounts": [
+            {
+              "name": "market",
+              "writable": true
+            },
+            {
+              "name": "borrow_position",
+              "writable": true
+            },
+            {
+              "name": "curator",
+              "signer": true
+            },
+            {
+              "name": "curator_supply_ata",
+              "writable": true
+            },
+            {
+              "name": "curator_collateral_ata",
+              "writable": true
+            },
+            {
+              "name": "market_supply_vault",
+              "writable": true
+            },
+            {
+              "name": "market_collateral_vault",
+              "writable": true
+            },
+            {
+              "name": "apl_token_program"
+            },
+            {
+              "name": "supply_oracle"
+            },
+            {
+              "name": "collateral_oracle"
+            },
+            {
+              "name": "autara_program"
+            }
+          ],
+          "args": [
+            {
+              "name": "max_borrowed_atoms_to_repay",
+              "type": "u64"
+            },
+            {
+              "name": "max_collateral_atoms_to_return",
+              "type": "u64"
             }
           ]
         }

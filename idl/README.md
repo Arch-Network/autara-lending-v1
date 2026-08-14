@@ -27,10 +27,13 @@ There are two ways to get the IDL to the decoder, and this repo supports both:
   - Accounts = `from_accounts` consumption order
     (`programs/autara-program/src/ixs/*.rs`) + the trailing `autara_program`
     account the client builders append.
-  - Covers **16 of 20** instructions. Deliberately omitted (complex nested config
-    payloads, decode falls through to the program display name):
-    `create_market` (0), `update_config` (9), `create_global_config` (12),
-    `update_global_config` (15). Add later if needed.
+  - Covers **all 22** instructions, tags 0..=21. The nested Pod config payloads
+    in `create_market` / `update_config` are represented as opaque fixed-size
+    byte arrays so the offsets of everything after them stay exact.
+  - `liquidate`, `borrow_deposit_apl` and `withdraw_repay_apl` declare only their
+    fixed accounts. Their builders append the callback program and all of the
+    callback's own accounts, and an IDL cannot express a variadic tail — so those
+    trailing accounts render unlabeled. That is a limitation, not an omission.
 - **`autara-idl-import.json`** — generated wrapper in the
   `import_program_verification` artifact format (program_id in **hex**, IDL
   embedded, `is_active: true`). Regenerate after editing the IDL:
@@ -39,7 +42,7 @@ There are two ways to get the IDL to the decoder, and this repo supports both:
   python3 - <<'EOF'
   import json
   idl = json.load(open('autara_lending.idl.json'))
-  json.dump({"program_id": "53def2dc8516302842b10e356914d2a5f6b33425ba42aec684f706aa1cf64192",
+  json.dump({"program_id": idl["address"],
              "display_name": "Autara Lending",
              "idl": {"schema_format": "anchor-idl-compatible", "schema_version": "0.1.0",
                       "is_active": True, "idl_json": idl}},

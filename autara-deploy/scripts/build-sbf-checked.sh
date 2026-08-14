@@ -32,9 +32,22 @@ if grep -q "overwrites values in the frame" "$log"; then
   exit 1
 fi
 
+# The bitcode exclusion is only sound while that symbol really is stripped from
+# the shipped ELF, so verify that rather than trusting it. If it ever survives
+# linking, the exclusion would hide live 4KB-frame UB — the exact class of bug
+# that shipped as the BorrowDepositApl access violation.
+elf="$(ls "$program_dir"/../../target/deploy/*.so 2>/dev/null || true)"
+if [ -n "$elf" ] && command -v nm >/dev/null 2>&1; then
+  if nm "$elf" 2>/dev/null | grep -q "bitcode.*histogram"; then
+    echo "error: bitcode::histogram is present in $elf — it is no longer dead code," >&2
+    echo "error: so the over-frame exclusion below is unsound. Fix the gate." >&2
+    exit 1
+  fi
+fi
+
 # Captured rather than tested with `grep -qv`: BSD grep exits 1 for `-qv` even
 # when non-matching lines exist, which would silently disable this gate on macOS.
-over_frame="$(grep "exceeded max offset" "$log" | grep -v "_ZN7bitcode" || true)"
+over_frame="$(grep "exceeded max offset" "$log" | grep -v "bitcode" || true)"
 if [ -n "$over_frame" ]; then
   echo "error: over-4KB SBF stack frame in $program_dir:" >&2
   echo "$over_frame" >&2
