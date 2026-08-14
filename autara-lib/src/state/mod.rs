@@ -1,6 +1,7 @@
 pub mod borrow_position;
 pub mod collateral_vault;
 pub mod global_config;
+pub mod liquidator_whitelist;
 pub mod market;
 pub mod market_config;
 pub mod market_wrapper;
@@ -14,6 +15,7 @@ const _: () = const {
         size_of::<supply_position::SupplyPosition>(),
         size_of::<market::Market>(),
         size_of::<global_config::GlobalConfig>(),
+        size_of::<liquidator_whitelist::LiquidatorWhitelistEntry>(),
     ];
     validate_all_different_sizes(accounts_size);
 };

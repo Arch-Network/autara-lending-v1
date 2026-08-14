@@ -91,6 +91,12 @@ pub enum LendingAccountValidationError {
     InvalidMintForTokenAccount,
     #[error("Invalid protocol authority")]
     InvalidProtocolAuthority,
+    #[error("Invalid liquidator whitelist entry")]
+    InvalidLiquidatorWhitelistEntry,
+    #[error("Missing liquidator whitelist entry")]
+    MissingLiquidatorWhitelistEntry,
+    #[error("Liquidator is not whitelisted")]
+    LiquidatorNotWhitelisted,
 }
 
 pub const ACCOUNT_VALIDATION_ERROR_OFFSET: u32 = 6000;
@@ -253,6 +259,26 @@ pub mod tests {
         assert_eq!(
             AccountValidationError::NotSigner.to_string(),
             "Account is not a signer"
+        );
+    }
+
+    #[test]
+    fn liquidator_whitelist_validation_error_discriminants_are_appended() {
+        assert_eq!(
+            u8::from(LendingAccountValidationError::InvalidProtocolAuthority),
+            5
+        );
+        assert_eq!(
+            u8::from(LendingAccountValidationError::InvalidLiquidatorWhitelistEntry),
+            6
+        );
+        assert_eq!(
+            u8::from(LendingAccountValidationError::MissingLiquidatorWhitelistEntry),
+            7
+        );
+        assert_eq!(
+            u8::from(LendingAccountValidationError::LiquidatorNotWhitelisted),
+            8
         );
     }
 }

@@ -9,6 +9,7 @@ use crate::{
         redeem_protocol_fees::RedeemProtocolFeesAccounts, *,
     },
     processor::{
+        add_whitelisted_liquidator::process_add_whitelisted_liquidator,
         begin_capital_sweep::process_begin_capital_sweep, borrow_apl::process_borrow_apl,
         borrow_deposit_apl::process_borrow_deposit_apl,
         create_borrow_position::process_create_borrow_position,
@@ -17,10 +18,11 @@ use crate::{
         deposit_apl_collateral::process_deposit_apl_collateral,
         donate_supply::process_donate_supply, liquidate::process_liquidate,
         redeem_curator_fees::process_redeem_curator_fees,
-        redeem_protocol_fees::process_redeem_protocol_fees, repay_apl::process_repay_apl,
-        settle_capital_sweep::process_settle_capital_sweep, socialize_loss::process_socialize_loss,
-        supply_apl::process_supply_apl, update_config::process_update_config,
-        update_global_config::process_update_global_config,
+        redeem_protocol_fees::process_redeem_protocol_fees,
+        remove_whitelisted_liquidator::process_remove_whitelisted_liquidator,
+        repay_apl::process_repay_apl, settle_capital_sweep::process_settle_capital_sweep,
+        socialize_loss::process_socialize_loss, supply_apl::process_supply_apl,
+        update_config::process_update_config, update_global_config::process_update_global_config,
         withdraw_apl_collateral::process_withdraw_apl_collateral,
         withdraw_repay_apl::process_withdraw_repay_apl, withdraw_supply::process_withdraw_supply,
     },
@@ -225,6 +227,18 @@ pub fn autara_process_instruction<'a>(
             msg!("Processing SettleCapitalSweep instruction");
             let settle_accounts = SettleCapitalSweepAccounts::from_accounts(&mut accounts_iter)?;
             process_settle_capital_sweep(&settle_accounts, data, accounts, program_id, &clock)
+        }
+        AurataInstruction::AddWhitelistedLiquidator(data) => {
+            msg!("Processing AddWhitelistedLiquidator instruction");
+            let add_accounts =
+                AddWhitelistedLiquidatorAccounts::from_accounts(&mut accounts_iter, data)?;
+            process_add_whitelisted_liquidator(&add_accounts, data, accounts, program_id)
+        }
+        AurataInstruction::RemoveWhitelistedLiquidator(data) => {
+            msg!("Processing RemoveWhitelistedLiquidator instruction");
+            let remove_accounts =
+                RemoveWhitelistedLiquidatorAccounts::from_accounts(&mut accounts_iter, data)?;
+            process_remove_whitelisted_liquidator(&remove_accounts, data, accounts, program_id)
         }
         AurataInstruction::Log => {
             let _check_accounts = LogAccounts::from_accounts(&mut accounts_iter)?;
