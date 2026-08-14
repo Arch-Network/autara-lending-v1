@@ -17,16 +17,22 @@
 //! throwaway program is abandoned on testnet afterward; its id is printed.
 
 use std::fs;
+use std::io::Read as _;
 
 use arch_sdk::{generate_new_keypair, ArchRpcClient, AsyncArchRpcClient, Config};
-use autara_client::{config::path_from_workspace, idl_deploy::upgrade_in_place};
+use autara_client::{
+    config::path_from_workspace,
+    idl_deploy::{publish_idl, upgrade_in_place},
+};
 use autara_deploy::elf_upload::deploy_program_elf;
+use flate2::read::ZlibDecoder;
 
 // Fresh-deploy a SMALL program, then upgrade to the big one, so the upgrade
 // GROWS the account and exercises the [2/4] resize path the live run will hit
 // (measured: 125 KB -> 772 KB here; live: 646 KB -> 772 KB).
 const FRESH_ELF: &str = "target/deploy/autara_oracle.so";
 const UPGRADE_ELF: &str = "target/deploy/autara_program.so";
+const IDL_PATH: &str = "idl/autara_lending.idl.json";
 
 fn config() -> Config {
     Config {
@@ -96,7 +102,7 @@ fn main() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(async move {
+        .block_on(async {
             let client = AsyncArchRpcClient::new(&config);
             upgrade_in_place(
                 &client,
@@ -108,7 +114,42 @@ fn main() -> anyhow::Result<()> {
             .await
         })?;
 
-    println!("✓ DRY RUN PASSED — node accepts writes and the full upgrade flow works.");
+    // 4. Publish the IDL to the throwaway, exercising the on-chain IDL handler
+    //    (Create + chunked Write, under the base-PDA signature) before it is
+    //    ever driven against the live program. Nothing else covers it: the
+    //    integration suite runs against the LIVE testnet deployment, so testing
+    //    these sub-ops there would mutate the real IDL account.
+    println!("publishing IDL to the throwaway (tests the on-chain IDL handler)...");
+    let idl_json = fs::read(path_from_workspace(IDL_PATH))?;
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(async {
+            let client = AsyncArchRpcClient::new(&config);
+            let idl_account = publish_idl(
+                &client,
+                config.network,
+                program_pubkey,
+                authority_keypair,
+                &idl_json,
+            )
+            .await?;
+            // Round-trip it the way the indexer does: inflate and parse.
+            let acc = client
+                .read_account_info(idl_account)
+                .await
+                .map_err(|e| anyhow::anyhow!("read idl account: {e}"))?;
+            let declared = u32::from_le_bytes(acc.data[40..44].try_into().unwrap()) as usize;
+            let mut json = Vec::new();
+            ZlibDecoder::new(&acc.data[44..44 + declared]).read_to_end(&mut json)?;
+            let parsed: serde_json::Value = serde_json::from_slice(&json)?;
+            let n = parsed["instructions"].as_array().map_or(0, |a| a.len());
+            println!("✓ IDL round-tripped from chain: {n} instructions decoded");
+            anyhow::ensure!(n == 22, "expected 22 instructions, inflated {n}");
+            Ok::<_, anyhow::Error>(())
+        })?;
+
+    println!("✓ DRY RUN PASSED — node accepts writes, upgrade flow works, IDL handler works.");
     println!(
         "  throwaway program {} is left on testnet; abandon it.",
         bs58::encode(program_pubkey.0).into_string()

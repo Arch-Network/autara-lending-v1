@@ -1,26 +1,35 @@
 //! Shared in-place program-upgrade flow (loader-v4 retract → resize → write →
-//! deploy), used by both `bin/upgrade_program` (live program) and
-//! `bin/dry_run_upgrade` (throwaway program) so the dry-run exercises the same
-//! code as the live upgrade.
+//! deploy) plus the on-chain IDL publish, used by both the live bins
+//! (`bin/upgrade_program`, `bin/publish_idl`) and `bin/dry_run_upgrade` so the
+//! dry run exercises the same code the live run will.
 //!
 //! Mirrors `arch_sdk` helper `async_program_deployment.rs::write_program_elf`,
 //! reimplemented on the pinned 0.6.2 API because the 0.6.2 `ProgramDeployer` is
 //! fresh-deploy-only.
 
+use std::io::Write as _;
+
 use arch_sdk::{
     arch_program::{
+        account::AccountMeta,
         bitcoin::{key::Keypair, Network},
         bpf_loader::{LoaderState, BPF_LOADER_ID},
         hash::Hash,
+        instruction::Instruction,
         loader_instruction,
         pubkey::Pubkey,
         rent::minimum_rent,
         sanitized::ArchMessage,
         system_instruction,
+        system_program::SYSTEM_PROGRAM_ID,
     },
     build_and_sign_transaction, sign_message_bip322, AsyncArchRpcClient, RuntimeTransaction,
     Signature, Status, MAX_TX_BATCH_SIZE,
 };
+use flate2::{write::ZlibEncoder, Compression};
+
+// Reuse the program's own selector constant so the two cannot drift.
+use autara_program::processor::idl::IDL_IX_TAG_LE;
 // arch_sdk 0.6.2's `extend_bytes_max_len` sizes chunks for the old 10 KiB tx
 // limit; refreshed testnet enforces 1232 bytes. Use the 0.7.0-style probe.
 use autara_deploy::elf_upload::elf_write_chunk_max_len;
@@ -317,6 +326,143 @@ pub async fn upgrade_in_place(
         "on-chain ELF does not match local file after upgrade"
     );
     println!("✓ upgrade complete; ELF verified.");
+    Ok(())
+}
+
+// --- on-chain IDL publishing ------------------------------------------------
+
+/// Anchor seed for the canonical IDL account.
+pub const IDL_SEED: &str = "anchor:idl";
+/// Borsh variant indices of the program's `IdlInstruction` (declaration order in
+/// `processor::idl`).
+const IX_CREATE: u8 = 0;
+const IX_WRITE: u8 = 2;
+/// Conservative Write payload: the whole tx must fit the 1232-byte limit.
+const IDL_WRITE_CHUNK: usize = 800;
+
+/// The program's canonical `anchor:idl` account — the address the indexer
+/// derives when it looks for an on-chain IDL.
+pub fn derive_idl_account(program_id: &Pubkey) -> anyhow::Result<(Pubkey, Pubkey)> {
+    let (base, _bump) = Pubkey::find_program_address(&[], program_id);
+    let idl = Pubkey::create_with_seed(&base, IDL_SEED, program_id).map_err(de)?;
+    Ok((idl, base))
+}
+
+/// zlib-compress an IDL JSON document, matching the indexer's `ZlibDecoder`.
+pub fn compress_idl(idl_json: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
+    enc.write_all(idl_json)?;
+    Ok(enc.finish()?)
+}
+
+/// Publish `idl_json` to `program_id`'s canonical IDL account by driving the
+/// program's own IDL handler (Create, then chunked Writes).
+///
+/// Resumable. `Write` APPENDS at the account's current `data_len`, so re-sending
+/// chunks that already landed would duplicate the payload, overrun the
+/// allocation and leave a blob whose `data_len` no longer matches. Read what is
+/// on chain, require it to prefix this document, and send only the remainder.
+pub async fn publish_idl(
+    client: &AsyncArchRpcClient,
+    net: Network,
+    program_id: Pubkey,
+    authority_keypair: Keypair,
+    idl_json: &[u8],
+) -> anyhow::Result<Pubkey> {
+    let authority_pubkey = Pubkey::from_slice(&authority_keypair.x_only_public_key().0.serialize());
+    let (idl_account, base) = derive_idl_account(&program_id)?;
+    let compressed = compress_idl(idl_json)?;
+
+    println!("Publishing IDL for {}", bs58::encode(program_id.0).into_string());
+    println!("  IDL json {} B -> zlib {} B", idl_json.len(), compressed.len());
+    println!("  IDL account: {}", bs58::encode(idl_account.0).into_string());
+
+    let already_written = match client.read_account_info(idl_account).await {
+        Err(_) => {
+            println!("  [create] allocating IDL account");
+            let mut data = IDL_IX_TAG_LE.to_vec();
+            data.push(IX_CREATE);
+            data.extend_from_slice(&(compressed.len() as u64).to_le_bytes());
+            let ix = Instruction {
+                program_id,
+                accounts: vec![
+                    AccountMeta::new(authority_pubkey, true), // from (payer, signer)
+                    AccountMeta::new(idl_account, false),     // to (created via CPI)
+                    AccountMeta::new_readonly(base, false),   // base PDA
+                    AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+                    AccountMeta::new_readonly(program_id, false), // handler checks == id
+                ],
+                data,
+            };
+            send_ix(client, net, &authority_keypair, authority_pubkey, ix).await?;
+            0
+        }
+        Ok(acc) => {
+            anyhow::ensure!(acc.data.len() >= 44, "idl account too small");
+            let written = u32::from_le_bytes(acc.data[40..44].try_into().unwrap()) as usize;
+            anyhow::ensure!(
+                written <= compressed.len() && compressed[..written] == acc.data[44..44 + written],
+                "on-chain IDL prefix ({written} B) does not match this document; \
+                 close the account and re-publish"
+            );
+            println!(
+                "  [create] account exists with {written}/{} B written, resuming",
+                compressed.len()
+            );
+            written
+        }
+    };
+
+    for (i, chunk) in compressed[already_written..]
+        .chunks(IDL_WRITE_CHUNK)
+        .enumerate()
+    {
+        let mut data = IDL_IX_TAG_LE.to_vec();
+        data.push(IX_WRITE);
+        data.extend_from_slice(&(chunk.len() as u32).to_le_bytes()); // borsh Vec<u8> len
+        data.extend_from_slice(chunk);
+        let ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(idl_account, false),     // idl (writable)
+                AccountMeta::new(authority_pubkey, true), // authority (signer)
+            ],
+            data,
+        };
+        println!("  [write {i}] {} bytes", chunk.len());
+        send_ix(client, net, &authority_keypair, authority_pubkey, ix).await?;
+    }
+
+    // Verify against the chain, not against what we believe we sent.
+    let acc = client.read_account_info(idl_account).await.map_err(de)?;
+    anyhow::ensure!(acc.data.len() >= 44, "idl account too small");
+    let data_len = u32::from_le_bytes(acc.data[40..44].try_into().unwrap()) as usize;
+    anyhow::ensure!(
+        data_len == compressed.len() && acc.data[44..44 + data_len] == compressed[..],
+        "on-chain IDL ({data_len} B) does not match the published document ({} B)",
+        compressed.len()
+    );
+    println!("✓ IDL published and verified on chain.");
+    Ok(idl_account)
+}
+
+async fn send_ix(
+    client: &AsyncArchRpcClient,
+    net: Network,
+    authority_keypair: &Keypair,
+    authority_pubkey: Pubkey,
+    ix: Instruction,
+) -> anyhow::Result<()> {
+    let bh = client.get_best_finalized_block_hash().await.map_err(de)?;
+    let tx = build_and_sign_transaction(
+        ArchMessage::new(&[ix], Some(authority_pubkey), bh),
+        vec![*authority_keypair],
+        net,
+    )
+    .map_err(de)?;
+    let txid = client.send_transaction(tx).await.map_err(de)?;
+    confirm(client, &txid).await?;
+    println!("        tx {}  {}", tx_b58(&txid), explorer_tx(&txid));
     Ok(())
 }
 
