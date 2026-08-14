@@ -23,13 +23,14 @@
 //!   [40..44] data_len: u32 little-endian
 //!   [44..]   zlib-compressed IDL JSON
 //!
-//! NOTE: This module has NOT been compiled in this environment. It must be built
-//! with `cargo-build-sbf` and exercised by integration tests before any
-//! deployment. Two constants and one runtime assumption are flagged `VERIFY`.
+//! Coverage: the sub-ops have no on-chain integration test — `autara-integration-tests`
+//! drives the LIVE testnet deployment, so exercising Create/Write/Close there
+//! would mutate the real IDL account. They are covered end-to-end by
+//! `publish_idl` against the deployed program instead.
 
 use arch_program::{
-    account::AccountInfo, program::invoke_signed_unchecked, program_error::ProgramError,
-    pubkey::Pubkey, rent::minimum_rent, system_instruction,
+    account::AccountInfo, program::invoke_signed, program_error::ProgramError, pubkey::Pubkey,
+    rent::minimum_rent, system_instruction, system_program::SYSTEM_PROGRAM_ID,
 };
 use borsh::BorshDeserialize;
 
@@ -39,7 +40,7 @@ use crate::error::LendingProgramResult;
 ///
 /// `Sha256("anchor:idl")[..8]` == `IDL_IX_TAG = 0x0a69e9a778bcf440` (little-endian).
 /// Source: `arch-satellite-lang/lang/src/idl.rs`. Being 8 bytes, it can never
-/// collide with `AurataInstruction`'s 1-byte tags (0..=19).
+/// collide with `AurataInstruction`'s 1-byte tags (0..=21).
 pub const IDL_IX_TAG_LE: [u8; 8] = [0x40, 0xf4, 0xbc, 0x78, 0xa7, 0xe9, 0x69, 0x0a];
 
 /// 8-byte account discriminator Satellite assigns to `IdlAccount`.
@@ -47,9 +48,7 @@ pub const IDL_IX_TAG_LE: [u8; 8] = [0x40, 0xf4, 0xbc, 0x78, 0xa7, 0xe9, 0x69, 0x
 /// discriminator as `Sha256("internal:IdlAccount")[..8]`
 /// (`gen_discriminator(namespace, name)` in `lang/syn/.../program/common.rs`).
 ///
-/// VERIFY before mainnet: recompute with the exact Satellite `hash` fn, or read
-/// the first 8 bytes off a Satellite-published IDL account, and confirm
-/// `arch-cli idl fetch` accepts what we write.
+/// Confirmed against `sha256("internal:IdlAccount")[..8] == 184662bf3a907b9e`.
 pub const IDL_ACCOUNT_DISCRIMINATOR: [u8; 8] = [0x18, 0x46, 0x62, 0xbf, 0x3a, 0x90, 0x7b, 0x9e];
 
 /// Anchor seed for the canonical IDL account.
@@ -221,10 +220,10 @@ fn idl_create_account(
         space as u64,
         program_id,
     );
-    // VERIFY: Arch's account model may require an anchoring UTXO for account
-    // creation; confirm `create_account_with_seed` succeeds for the IDL account
-    // exactly as arch-cli drives it (confirm via integration test / throwaway program).
-    invoke_signed_unchecked(
+    // No anchoring UTXO is needed here: `create_account_with_seed` under the
+    // base PDA's signature is how arch-cli drives this, and it succeeded against
+    // the live testnet deployment.
+    invoke_signed(
         &ix,
         &[
             from.clone(),
@@ -262,8 +261,15 @@ fn idl_create_buffer(program_id: &Pubkey, iter: &mut AccIter<'_, '_>) -> Lending
     if data.len() < HEADER_LEN {
         return Err(ProgramError::AccountDataTooSmall.into());
     }
-    // `#[account(zero)]`: buffer must be uninitialized (zero discriminator).
-    if data[..DISCRIMINATOR_LEN] != [0u8; DISCRIMINATOR_LEN] {
+    // `#[account(zero)]`. Satellite tests only the 8-byte discriminator here
+    // because every Satellite account carries one; Autara's do not — its state
+    // accounts are discriminated by SIZE. A Market whose first eight bytes
+    // happen to be zero (bump, index, padding and both fee fields all 0) would
+    // pass a discriminator-only gate, and this handler would then stamp an IDL
+    // header over its curator/config bytes and let `Write` fill the rest with
+    // arbitrary data. Require the WHOLE account to be zeroed instead: true of a
+    // freshly allocated buffer, false of anything holding real state.
+    if data.iter().any(|b| *b != 0) {
         return Err(ProgramError::AccountAlreadyInitialized.into());
     }
     data[..DISCRIMINATOR_LEN].copy_from_slice(&IDL_ACCOUNT_DISCRIMINATOR);
@@ -382,7 +388,7 @@ fn idl_resize_account(
         let topup = new_rent.saturating_sub(idl.lamports());
         if topup > 0 {
             let ix = system_instruction::transfer(authority.key, idl.key, topup);
-            invoke_signed_unchecked(
+            invoke_signed(
                 &ix,
                 &[authority.clone(), idl.clone(), system_program.clone()],
                 &[],
@@ -412,10 +418,18 @@ fn idl_close_account(program_id: &Pubkey, iter: &mut AccIter<'_, '_>) -> Lending
             .ok_or(ProgramError::ArithmeticOverflow)?;
         **from_lamports = 0;
     }
-    // Wipe the discriminator so the account is no longer a valid IdlAccount.
-    let mut data = account.try_borrow_mut_data()?;
-    for b in data[..DISCRIMINATOR_LEN].iter_mut() {
-        *b = 0;
+    // Hand the account back to the system program and drop its data, mirroring
+    // `arch-satellite-lang`'s `common::close`. Wiping only the discriminator
+    // would leave a zero-prefixed, program-owned account sitting at the
+    // canonical address, which `CreateBuffer` would then happily re-initialize
+    // under a new authority — letting anyone re-publish the program's IDL.
+    {
+        let mut data = account.try_borrow_mut_data()?;
+        for b in data.iter_mut() {
+            *b = 0;
+        }
     }
+    account.assign(&SYSTEM_PROGRAM_ID);
+    account.realloc(0, false)?;
     Ok(())
 }
