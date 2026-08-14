@@ -135,34 +135,57 @@ if [[ "$MODE" == "testnet" ]]; then
   export E2E_ABTC_MINT="${E2E_ABTC_MINT:-1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9}"
   export ORACLE_PROGRAM_ID="${ORACLE_PROGRAM_ID:-eee682c27db375bebbc17ed9a76aaa935c8b72bc7de50d736f03e2dfbed84b15}"
   export ORACLE_FEEDS="${ORACLE_FEEDS:-0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a}"
-  if [[ -z "${E2E_USER_KEY:-}" ]]; then
-    mkdir -p /tmp/autara-e2e
-    openssl rand -hex 32 | tr -d '\n' > /tmp/autara-e2e/user.key
-    export E2E_USER_KEY=/tmp/autara-e2e/user.key
+  # Nobody holds the mint authority for the live aUSD/aBTC mints, so e2e cannot
+  # mint itself tokens; it runs against a dedicated pre-funded wallet with
+  # E2E_SKIP_MINT=1, the same path mainnet-safe uses. The flow unwinds every
+  # position it opens, so the wallet only drifts by interest (~1 atom per run).
+  export E2E_USER_KEY="${E2E_USER_KEY:-keys/e2e-testnet-user.key}"
+  if [[ ! -f "$E2E_USER_KEY" ]]; then
+    echo "Missing pre-funded e2e user key: $E2E_USER_KEY" >&2
+    echo "See docs/key-hygiene.md to restore it, or point E2E_USER_KEY at your own" >&2
+    echo "wallet holding aUSD + aBTC on testnet." >&2
+    fail "e2e user key present"
   fi
-  unset E2E_SKIP_MINT || true
+  export E2E_SKIP_MINT=1
 
   ./scripts/check-e2e-targets.sh || fail "e2e targets exist on-chain"
+
+  # E2E_SKIP_MINT=1 also skips the faucet, so top the wallet up for gas.
+  cargo run -q -p autara-client --example fund_signer -- \
+    --key "$E2E_USER_KEY" --rpc "$E2E_RPC" --network testnet \
+    || fail "top up e2e user gas"
 
   echo "== 3a) Start local Pyth pusher =="
   cargo build --release -p autara-pyth
   PUSHER_LOG="$LOG_DIR/pusher-$TS.log"
   : >"$PUSHER_LOG"
+  # --signer is required: the oracle binds each feed to its creator, so the
+  # default throwaway key cannot update the live feeds.
+  ORACLE_SIGNER_KEY="${ORACLE_SIGNER_KEY:-keys/autara-cli-signer.key}"
+  [[ -f "$ORACLE_SIGNER_KEY" ]] || fail "oracle feed authority key present ($ORACLE_SIGNER_KEY)"
   ./target/release/autara-pyth \
     --rpc "$E2E_RPC" \
     --network testnet \
     --program-id "$ORACLE_PROGRAM_ID" \
     --feeds "$ORACLE_FEEDS" \
+    --signer "$ORACLE_SIGNER_KEY" \
     >"$PUSHER_LOG" 2>&1 &
   PUSHER_PID=$!
   ok=0
+  # "Sending" only means submitted. A pusher signing with the wrong key logs it
+  # forever while every push is rejected, and e2e then fails later with a
+  # stale-oracle error that looks unrelated. Require a push with no failure.
   for i in $(seq 1 60); do
     if ! kill -0 "$PUSHER_PID" 2>/dev/null; then
       echo "Pusher exited early; log:" >&2
       cat "$PUSHER_LOG" >&2
       fail "local pusher stay alive"
     fi
-    if grep -q "Sending" "$PUSHER_LOG"; then
+    if grep -q "Incorrect authority provided" "$PUSHER_LOG"; then
+      echo "Pusher is not the feed authority; every push is rejected." >&2
+      fail "pusher signs as feed authority"
+    fi
+    if grep -q "Sending" "$PUSHER_LOG" && ! grep -q "Transaction failed" "$PUSHER_LOG"; then
       ok=1
       break
     fi
