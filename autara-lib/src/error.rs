@@ -5,8 +5,8 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 pub type LendingResult<T = ()> = Result<T, ErrorWithContext<LendingError>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("error = {error:?}, msg = {msg:?}, stack = {stack:?}")]
-pub struct ErrorWithContext<T> {
+#[error("error = {error}, msg = {msg:?}, stack = {stack:?}")]
+pub struct ErrorWithContext<T: std::fmt::Display> {
     pub error: T,
     pub msg: Vec<DisplayCow>,
     pub stack: Vec<DisplayLocation>,
@@ -30,7 +30,7 @@ impl std::fmt::Debug for DisplayCow {
     }
 }
 
-impl<T> ErrorWithContext<T> {
+impl<T: std::fmt::Display> ErrorWithContext<T> {
     pub fn new(error: T, location: &'static std::panic::Location<'static>) -> Self {
         let mut context = Vec::with_capacity(4);
         context.push(DisplayLocation(location));
@@ -42,7 +42,7 @@ impl<T> ErrorWithContext<T> {
     }
 }
 
-impl<T> Deref for ErrorWithContext<T> {
+impl<T: std::fmt::Display> Deref for ErrorWithContext<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -56,50 +56,92 @@ impl PartialEq<LendingError> for ErrorWithContext<LendingError> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive, thiserror::Error)]
 #[repr(u8)]
 pub enum LendingError {
+    #[error("Math overflow")]
     MathOverflow,
+    #[error("Addition overflow")]
     AdditionOverflow,
+    #[error("Subtraction overflow")]
     SubtractionOverflow,
+    #[error("Multiplication overflow")]
     MultiplicationOverflow,
+    #[error("Division overflow")]
     DivisionOverflow,
+    #[error("Division by zero")]
     DivisionByZero,
+    #[error("Numeric cast overflow")]
     CastOverflow,
+    #[error("Borrow would exceed the market max loan-to-value (LTV)")]
     MaxLtvReached,
+    #[error("Borrow would exceed the market max utilisation rate")]
     MaxUtilisationRateReached,
+    #[error("Position does not belong to this market")]
     InvalidMarketForPosition,
+    #[error("Position is healthy and cannot be liquidated")]
     PositionIsHealthy,
+    #[error("Supply would exceed the market max supply")]
     MaxSupplyReached,
+    #[error("Invalid LTV configuration")]
     InvalidLtvConfig,
+    #[error("Invalid interest rate curve")]
     InvalidCurve,
+    #[error("Invalid exponential function argument")]
     InvalidExpArg,
+    #[error("Invalid max utilisation rate")]
     InvalidMaxUtilisationRate,
+    #[error("Liquidation must reduce the position loan-to-value (LTV)")]
     InvalidLiquidationLtvShouldDecrease,
+    #[error("Invalid Pyth oracle account")]
     InvalidPythOracleAccount,
+    #[error("Invalid Chaos Labs oracle account")]
     InvalidChaosOracleAccount,
+    #[error("Invalid oracle feed id")]
     InvalidOracleFeedId,
+    #[error("Failed to load account")]
     FailedToLoadAccount,
+    #[error("Withdrawal exceeds available market reserves")]
     WithdrawalExceedsReserves,
+    #[error("Withdrawal exceeds the amount deposited")]
     WithdrawalExceedsDeposited,
+    #[error("Repay amount exceeds the outstanding borrow")]
     RepayExceedsBorrowed,
+    #[error("Oracle price is too old")]
     OracleRateTooOld,
+    #[error("Oracle price confidence is too low relative to the price")]
     OracleRateRelativeConfidenceTooLow,
+    #[error("Oracle price is negative")]
     NegativeOracleRate,
+    #[error("Oracle price is zero or null")]
     OracleRateIsNull,
+    #[error("Oracle confidence interval exceeds the price")]
     OracleConfidenceExceedsRate,
+    #[error("Liquidation did not meet market requirements")]
     LiquidationDidNotMeetRequirements,
+    #[error("Fee is too high")]
     FeeTooHigh,
+    #[error("Share accounting overflow")]
     SharesOverflow,
+    #[error("Invalid protocol authority nomination")]
     InvalidNomination,
+    #[error("Cannot modify share price when there are zero shares")]
     CantModifySharePriceIfZeroShares,
+    #[error("Interest rate cannot be negative")]
     NegativeInterestRate,
+    #[error("Cannot socialize debt for a healthy position")]
     CannotSocializeDebtForHealthyPosition,
+    #[error("Unsupported mint decimals")]
     UnsupportedMintDecimals,
+    #[error("Invalid oracle configuration")]
     InvalidOracleConfig,
+    #[error("A capital sweep is already pending for this market")]
     CapitalSweepPending,
+    #[error("No capital sweep is pending for this market")]
     NoCapitalSweepPending,
+    #[error("Capital sweep position is insolvent")]
     CapitalSweepPositionInsolvent,
+    #[error("Capital sweep did not meet market requirements")]
     CapitalSweepDidNotMeetRequirements,
 }
 
@@ -112,7 +154,7 @@ impl LendingError {
     }
 }
 
-impl<T> From<T> for ErrorWithContext<T> {
+impl<T: std::fmt::Display> From<T> for ErrorWithContext<T> {
     #[track_caller]
     fn from(error: T) -> Self {
         Self::new(error, std::panic::Location::caller())
@@ -159,4 +201,45 @@ macro_rules! map_context {
         let caller = std::panic::Location::caller();
         |_| $error.with_context(caller)
     }};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lending_error_messages_are_user_readable() {
+        let cases = [
+            (
+                LendingError::MaxLtvReached,
+                "Borrow would exceed the market max loan-to-value (LTV)",
+            ),
+            (
+                LendingError::PositionIsHealthy,
+                "Position is healthy and cannot be liquidated",
+            ),
+            (
+                LendingError::OracleRateTooOld,
+                "Oracle price is too old",
+            ),
+            (
+                LendingError::CapitalSweepPending,
+                "A capital sweep is already pending for this market",
+            ),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.to_string(), expected);
+            assert!(!err.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn error_with_context_displays_inner_message() {
+        let err: ErrorWithContext<LendingError> = LendingError::MaxSupplyReached.into();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("Supply would exceed the market max supply"),
+            "unexpected display: {rendered}"
+        );
+    }
 }
