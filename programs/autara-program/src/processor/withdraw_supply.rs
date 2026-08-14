@@ -8,6 +8,7 @@ use autara_lib::{
 
 use crate::{error::LendingProgramResult, ixs::WithdrawSupplyAccounts};
 
+#[inline(never)]
 pub fn process_withdraw_supply(
     withdraw_supply_accounts: &WithdrawSupplyAccounts,
     data: &WithdrawSupplyInstruction,

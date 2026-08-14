@@ -1,6 +1,7 @@
 use arch_program::pubkey::Pubkey;
 use autara_lib::state::{
-    borrow_position::BorrowPosition, global_config::GlobalConfig, market::Market,
+    borrow_position::BorrowPosition, global_config::GlobalConfig,
+    liquidator_whitelist::LiquidatorWhitelistEntry, market::Market,
     supply_position::SupplyPosition,
 };
 use autara_program_lib::accounts::{
@@ -42,6 +43,12 @@ impl ZeroCopyInitialized for AutaraAccount<SupplyPosition> {
 impl ZeroCopyInitialized for AutaraAccount<GlobalConfig> {
     fn is_initialized(&self) -> bool {
         self.0.admin() != &ZEROED_PUBKEY
+    }
+}
+
+impl ZeroCopyInitialized for AutaraAccount<LiquidatorWhitelistEntry> {
+    fn is_initialized(&self) -> bool {
+        self.0.market() != &ZEROED_PUBKEY
     }
 }
 

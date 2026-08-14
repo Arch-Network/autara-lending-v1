@@ -87,6 +87,39 @@ pub struct AutaraTestEnv {
     pub collateral_feed_id: [u8; 32],
 }
 
+/// Block until every freshly created account is readable on the RPC node.
+///
+/// Creating an account returns before it is queryable, so using it straight away
+/// intermittently fails with "Account not found" or "fee payer must be signer,
+/// writable, system-owned, and present". Against live testnet that is the
+/// dominant source of test flakiness, and retrying the whole test does not help:
+/// each attempt generates new keypairs and re-runs the same race. Waiting for
+/// the accounts we just created does.
+async fn wait_for_accounts(
+    arch_client: &AsyncArchRpcClient,
+    pubkeys: &[Pubkey],
+) -> anyhow::Result<()> {
+    const ATTEMPTS: u32 = 60;
+    const DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+    for pubkey in pubkeys {
+        let mut visible = false;
+        for _ in 0..ATTEMPTS {
+            if arch_client.read_account_info(*pubkey).await.is_ok() {
+                visible = true;
+                break;
+            }
+            tokio::time::sleep(DELAY).await;
+        }
+        if !visible {
+            anyhow::bail!(
+                "account {pubkey} still not visible after {}s",
+                ATTEMPTS as u64 * DELAY.as_millis() as u64 / 1000
+            );
+        }
+    }
+    Ok(())
+}
+
 impl AutaraTestEnv {
     pub async fn new(
         arch_client: AsyncArchRpcClient,
@@ -101,6 +134,7 @@ impl AutaraTestEnv {
             arch_client.create_and_fund_account_with_faucet(&user_two_keypair),
             arch_client.create_and_fund_account_with_faucet(&authority_keypair)
         )?;
+        wait_for_accounts(&arch_client, &[authority, user_one_pubkey, user_two_pubkey]).await?;
         let amounts = [
             (user_one_pubkey, 1 << 55),
             (user_two_pubkey, 1 << 55),
@@ -356,6 +390,11 @@ pub async fn create_mint_and_mint_custom_amounts(
             processed_tx[0].status
         ));
     }
+
+    // The mint is initialized by a second transaction, which the node rejects
+    // with "Account not found" if it has not caught up with the account the
+    // first one just created.
+    wait_for_accounts(client, &[mint_pubkey]).await?;
 
     let mut instructions = Vec::new();
 

@@ -13,6 +13,10 @@ autara-program-lib = { path = "autara-program-lib" }
 autara-oracle = { path = "programs/autara-oracle" }
 
 # Arch dependencies
+# Stay on 0.6.2 (Autara's current train). Idempotent ATA builders from
+# Arch-Network/arch-network#2491 are not on crates.io yet; `create_ata_ix`
+# emits wire-compatible instruction data `[1]` until a compatible publish.
+# Bumping to 0.6.8+ requires an AsyncArchRpcClient → ArchRpcClient migration.
 arch_sdk = { version = "=0.6.2" }
 arch_program = { version = "=0.6.2" }
 apl-token = { version = "=0.6.2", features = ["no-entrypoint"] }
@@ -32,6 +36,7 @@ bytemuck = { version = "1.19.0" }
 arrayref = { version = "0.3.9" }
 base64 = { version = "0.22.1" }
 hex = { version = "0.4.3" }
+bs58 = { version = "0.5" }
 hex-literal = { version = "0.4.1" }
 
 # Async runtime and utilities

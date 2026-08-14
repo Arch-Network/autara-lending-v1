@@ -22,9 +22,9 @@
 #   initialize   STEP_INIT_CONFIG=true (deploy steps off) -> create_global_config
 #                only. Separable from deploy so the config can be (re)created
 #                without redeploying. Requires the program ALREADY deployed.
-#   upgrade      STEP_DEPLOY_PROGRAM=true (oracle/init off) -> reuse the EXISTING
-#                program keypair (program id / autara_program::id() unchanged),
-#                build the new ELF, and re-upload via the SDK ProgramDeployer.
+#   upgrade      STEP_DEPLOY_PROGRAM=true + STEP_DEPLOY_ORACLE=true (init off) ->
+#                reuse the EXISTING program + oracle keypairs (ids unchanged),
+#                build both ELFs, and re-upload via the SDK ProgramDeployer.
 #   setup-markets STEP_TOKEN_SETUP=true + STEP_CREATE_MARKET=true (deploy/init
 #                off) -> ensure the configured APL mints exist, then create a
 #                lending market per MARKET_PAIRS. Requires the program AND the
@@ -184,8 +184,8 @@ jobs:
         run: cargo build -q -p autara-deploy
 
       # CRITICAL ORDERING: the ELF(s) are built AFTER the sync so the on-chain
-      # autara_program::id() matches. deploy/upgrade real runs only. The oracle
-      # is position-independent, so only `deploy` builds it.
+      # autara_program::id() matches. deploy/upgrade real runs only. Oracle is
+      # position-independent; both deploy and upgrade rebuild + re-upload it.
       - name: Build SBF ELFs (post-sync)
         if: ${{ (inputs.action == 'deploy' || inputs.action == 'upgrade') && inputs.dry_run == false }}
         run: |
@@ -203,15 +203,13 @@ jobs:
           MULTIARCH="$(gcc -print-multiarch 2>/dev/null || echo x86_64-linux-gnu)"
           export CFLAGS="-I/usr/include/${MULTIARCH}${CFLAGS:+ $CFLAGS}"
           echo "Building autara-program ELF (cargo-build-sbf --features entrypoint)…"
-          ( cd programs/autara-program && cargo-build-sbf --features entrypoint )
+          ./autara-deploy/scripts/build-sbf-checked.sh programs/autara-program
           test -f target/deploy/autara_program.so || { echo "::error::cargo build-sbf did not produce target/deploy/autara_program.so" >&2; exit 1; }
           echo "autara_program.so sha256: $(sha256sum target/deploy/autara_program.so | cut -d' ' -f1)"
-          if [ "$ACTION" = "deploy" ]; then
-            echo "Building autara-oracle ELF (cargo-build-sbf --features entrypoint)…"
-            ( cd programs/autara-oracle && cargo-build-sbf --features entrypoint )
-            test -f target/deploy/autara_oracle.so || { echo "::error::cargo build-sbf did not produce target/deploy/autara_oracle.so" >&2; exit 1; }
-            echo "autara_oracle.so sha256: $(sha256sum target/deploy/autara_oracle.so | cut -d' ' -f1)"
-          fi
+          echo "Building autara-oracle ELF (cargo-build-sbf --features entrypoint)…"
+          ./autara-deploy/scripts/build-sbf-checked.sh programs/autara-oracle
+          test -f target/deploy/autara_oracle.so || { echo "::error::cargo build-sbf did not produce target/deploy/autara_oracle.so" >&2; exit 1; }
+          echo "autara_oracle.so sha256: $(sha256sum target/deploy/autara_oracle.so | cut -d' ' -f1)"
 
       # ---- deploy: program + oracle ELFs (global config is a separate action)
       - name: Deploy programs
@@ -231,22 +229,22 @@ jobs:
             target/debug/autara-deploy
           fi
 
-      # ---- upgrade: reuse the EXISTING program keypair, re-upload the program -
-      - name: Upgrade program
+      # ---- upgrade: reuse EXISTING program + oracle keypairs, re-upload both --
+      - name: Upgrade program + oracle
         if: ${{ inputs.action == 'upgrade' }}
         run: |
           set -euo pipefail
           # shellcheck disable=SC1091
           source autara-deploy/scripts/ci-load-env.sh
-          export STEP_DEPLOY_PROGRAM=true STEP_DEPLOY_ORACLE=false STEP_INIT_CONFIG=false
+          export STEP_DEPLOY_PROGRAM=true STEP_DEPLOY_ORACLE=true STEP_INIT_CONFIG=false
           export STEP_TOKEN_SETUP=false STEP_CREATE_MARKET=false
           export OUTPUT_PATH="deployments/${NETWORK}-upgrade.json"
           mkdir -p deployments
           if [ "$DRY_RUN" = "true" ]; then
-            echo "DRY RUN: previewing upgrade; no transactions will be sent."
+            echo "DRY RUN: previewing program+oracle upgrade; no transactions will be sent."
             target/debug/autara-deploy --dry-run
           else
-            echo "REAL UPGRADE on ${NETWORK} (program id unchanged): transactions WILL be sent."
+            echo "REAL UPGRADE on ${NETWORK} (program + oracle ids unchanged): transactions WILL be sent."
             target/debug/autara-deploy
           fi
 

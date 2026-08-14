@@ -8,6 +8,7 @@ use autara_lib::{
 
 use crate::{error::LendingProgramResult, ixs::BorrowAplAccounts};
 
+#[inline(never)]
 pub fn process_borrow_apl(
     borrow_apl_accounts: &BorrowAplAccounts,
     data: &BorrowAplInstruction,

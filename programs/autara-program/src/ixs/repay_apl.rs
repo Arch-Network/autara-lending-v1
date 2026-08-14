@@ -21,6 +21,7 @@ pub struct RepayAplAccounts<'a, 'b> {
 }
 
 impl<'a, 'b> RepayAplAccounts<'a, 'b> {
+    #[inline(never)]
     pub fn from_accounts(
         accounts: &mut impl Iterator<Item = &'b AccountInfo<'a>>,
     ) -> LendingProgramResult<Self>
@@ -45,16 +46,52 @@ impl<'a, 'b> RepayAplAccounts<'a, 'b> {
         let borrow_position = self.borrow_position.load_ref();
         let market = self.market.load_ref();
         if borrow_position.authority() != self.authority.key {
-            return Err(LendingAccountValidationError::InvalidAuthority.into());
+            use crate::error::{format_pubkey_pair, validation_err};
+            return Err(validation_err(
+                LendingAccountValidationError::InvalidAuthority,
+                format_pubkey_pair(
+                    "position_authority",
+                    borrow_position.authority(),
+                    "signer",
+                    self.authority.key,
+                ),
+            ));
         }
         if borrow_position.market() != self.market.key() {
-            return Err(LendingAccountValidationError::InvalidMarket.into());
+            use crate::error::{format_pubkey_pair, validation_err};
+            return Err(validation_err(
+                LendingAccountValidationError::InvalidMarket,
+                format_pubkey_pair(
+                    "position_market",
+                    borrow_position.market(),
+                    "market",
+                    self.market.key(),
+                ),
+            ));
         }
         if market.supply_vault().vault() != self.market_supply_vault.key() {
-            return Err(LendingAccountValidationError::InvalidMarketVault.into());
+            use crate::error::{format_pubkey_pair, validation_err};
+            return Err(validation_err(
+                LendingAccountValidationError::InvalidMarketVault,
+                format_pubkey_pair(
+                    "expected_vault",
+                    market.supply_vault().vault(),
+                    "provided_vault",
+                    self.market_supply_vault.key(),
+                ),
+            ));
         }
         if &self.authority_supply_ata.mint != market.supply_vault().mint() {
-            return Err(LendingAccountValidationError::InvalidMintForTokenAccount.into());
+            use crate::error::{format_pubkey_pair, validation_err};
+            return Err(validation_err(
+                LendingAccountValidationError::InvalidMintForTokenAccount,
+                format_pubkey_pair(
+                    "ata_mint",
+                    &self.authority_supply_ata.mint,
+                    "market_mint",
+                    market.supply_vault().mint(),
+                ),
+            ));
         }
         Ok(())
     }

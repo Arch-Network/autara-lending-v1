@@ -9,6 +9,9 @@ tracing-subscriber = { workspace = true, features = ["fmt"] }
 tracing = { workspace = true }
 autara-lib = { workspace = true , features = ["client"] }
 autara-pyth = { workspace = true }
+# Network-safe ELF write chunking (Arch 1232-byte tx limit) for the
+# upgrade/dry-run bins.
+autara-deploy = { path = "../autara-deploy" }
 
 arch_sdk = { workspace = true }
 apl-token = { workspace = true }
@@ -37,6 +40,7 @@ futures = { workspace = true }
 apl-associated-token-account.workspace = true
 dotenvy = "*"
 bs58 = "*"
+flate2 = "1"
 
 [[bin]]
 name = "autara-cli"

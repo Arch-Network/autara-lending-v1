@@ -1,9 +1,13 @@
 // Testnet price pusher: fetches Pyth prices or falls back to DIA if hermes is down, and writes oracle accounts.
 
+mod explorer;
 mod metrics;
+mod slack_alerts;
 
 pub use metrics::{start_metrics_server, PusherMetrics, HEALTH_MAX_STALE_SECS};
 
+use explorer::ExplorerClient;
+use slack_alerts::SlackBalanceAlerter;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
@@ -46,10 +50,19 @@ pub async fn fetch_and_push_feeds(
     metrics: Option<PusherMetrics>,
 ) {
     let signer_pubkey = Pubkey::from_slice(&signer.x_only_public_key().0.serialize());
+    let mut slack_balance_alerter = SlackBalanceAlerter::from_env(bitcoin_network, signer_pubkey);
+    let explorer = ExplorerClient::from_env(bitcoin_network);
     // Push immediately on start so a restart recovers stale feeds without
     // waiting a full interval (markets fail at max_age=60s).
     loop {
-        refresh_signer_balance(client, &signer_pubkey, bitcoin_network, metrics.as_ref()).await;
+        let signer_balance = refresh_signer_balance(
+            client,
+            explorer.as_ref(),
+            &signer_pubkey,
+            bitcoin_network,
+            metrics.as_ref(),
+        )
+        .await;
         match push_once(
             client,
             autara_oracle_program_id,
@@ -75,6 +88,11 @@ pub async fn fetch_and_push_feeds(
                     m.record_push_failure();
                 }
             }
+        }
+        // Alerting is deliberately after the oracle transaction so a slow or
+        // unavailable Slack endpoint cannot delay a price update.
+        if let Some(lamports) = signer_balance {
+            slack_balance_alerter.observe(lamports).await;
         }
         // Always sleep — never busy-loop on fetch/convert failures (that can
         // CPU-spin and get the Railway service killed).
@@ -166,15 +184,27 @@ async fn push_once(
 
 async fn refresh_signer_balance(
     client: &AsyncArchRpcClient,
+    explorer: Option<&ExplorerClient>,
     signer_pubkey: &Pubkey,
     bitcoin_network: Network,
     metrics: Option<&PusherMetrics>,
-) {
-    let lamports = match client.read_account_info(*signer_pubkey).await {
-        Ok(info) => info.lamports,
+) -> Option<u64> {
+    // Balance reads go through the explorer API wherever it indexes the
+    // network: a single RPC node can serve stale account state, which flapped
+    // the balance alerts between critical and recovered.
+    let read = match explorer {
+        Some(explorer) => explorer.signer_balance(signer_pubkey).await,
+        None => client
+            .read_account_info(*signer_pubkey)
+            .await
+            .map(|info| info.lamports)
+            .map_err(|e| anyhow::anyhow!("{e}")),
+    };
+    let lamports = match read {
+        Ok(lamports) => lamports,
         Err(err) => {
             tracing::warn!("Failed to read pusher signer balance: {err}");
-            return;
+            return None;
         }
     };
     if let Some(metrics) = metrics {
@@ -192,6 +222,7 @@ async fn refresh_signer_balance(
             tracing::error!("Faucet airdrop failed: {err}");
         }
     }
+    Some(lamports)
 }
 
 pub struct AutaraPythPusherClient {

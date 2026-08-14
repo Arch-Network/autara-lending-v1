@@ -11,6 +11,9 @@
 
 mod artifact;
 mod config;
+// Lives in the lib target (shared with autara-client's upgrade bins); re-exported
+// so the bin's own modules keep resolving it as `crate::elf_upload`.
+pub use autara_deploy::elf_upload;
 mod rpc;
 mod steps;
 mod verify;
@@ -284,9 +287,8 @@ async fn run_fund(args: FundArgs) -> Result<()> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // A single-thread runtime drives the async reads/sends. The synchronous
-    // `ProgramDeployer` is invoked OUTSIDE `block_on` (it drives its own
-    // blocking client), mirroring the repo's existing deploy binary.
+    // A single-thread runtime drives the async reads/sends. Synchronous ELF
+    // upload runs OUTSIDE `block_on` (blocking ArchRpcClient).
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -597,7 +599,7 @@ fn main() -> Result<()> {
         println!("mainnet: deployer + admin funding verified");
     }
 
-    // Deploy the programs (SYNCHRONOUS ProgramDeployer — outside the runtime).
+    // Deploy the programs (synchronous ELF upload — outside the runtime).
     if step_deploy_program {
         artifact.program_elf_sha256 = Some(sha256_file(&cfg.program_elf_path)?);
         ctx.deploy_program(

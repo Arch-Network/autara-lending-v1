@@ -8,6 +8,7 @@ use autara_lib::{
 
 use crate::{error::LendingProgramResult, ixs::redeem_protocol_fees::RedeemProtocolFeesAccounts};
 
+#[inline(never)]
 pub fn process_redeem_protocol_fees(
     accounts: &RedeemProtocolFeesAccounts,
     account_infos: &[AccountInfo],

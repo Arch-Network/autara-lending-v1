@@ -46,7 +46,7 @@ impl Network {
         }
     }
 
-    /// Bitcoin network used by `build_and_sign_transaction` / `ProgramDeployer`.
+    /// Bitcoin network used by `build_and_sign_transaction` / ELF upload.
     /// Testnet uses `Testnet4`, matching the repo's existing testnet deploy;
     /// mainnet uses `Bitcoin` (matches `arch_sdk::Config::mainnet`).
     pub fn bitcoin_network(&self) -> Result<BitcoinNetwork> {
@@ -76,7 +76,7 @@ impl FromStr for Network {
 
 /// A token mint to record in the deployment artifact and to wire into the
 /// market-creation steps. Parsed from
-/// `TOKENS=LABEL:MINT_HEX:DECIMALS[:MINT_AMOUNT[:FAUCET_AMOUNT]],...`.
+/// `TOKENS=LABEL:MINT:DECIMALS[:MINT_AMOUNT[:FAUCET_AMOUNT]],...` (mint base58 or hex).
 ///
 /// `mint_amount` is the initial supply minted to the authority's ATA by the
 /// (opt-in) `mint_initial_supply` deploy step; `faucet_amount` is the per-user
@@ -283,7 +283,20 @@ where
 }
 
 fn parse_pubkey(key: &str, value: &str) -> Result<Pubkey> {
-    Pubkey::from_str(value.trim()).map_err(|e| anyhow!("invalid pubkey for {key}: {e:?}"))
+    parse_pubkey_base58_or_hex(value).map_err(|e| anyhow!("invalid pubkey for {key}: {e}"))
+}
+
+fn parse_pubkey_base58_or_hex(value: &str) -> Result<Pubkey> {
+    let value = value.trim();
+    if let Ok(bytes) = bs58::decode(value).into_vec() {
+        if bytes.len() == 32 {
+            return Ok(Pubkey::from_slice(&bytes));
+        }
+    }
+    if let Ok(pk) = Pubkey::from_str(value) {
+        return Ok(pk);
+    }
+    Err(anyhow!("expected base58 or hex pubkey, got '{value}'"))
 }
 
 fn env_pubkey_opt(key: &str) -> Result<Option<Pubkey>> {
@@ -293,9 +306,8 @@ fn env_pubkey_opt(key: &str) -> Result<Option<Pubkey>> {
     }
 }
 
-/// Parse `LABEL:MINT_HEX:DECIMALS[:MINT_AMOUNT[:FAUCET_AMOUNT]]` entries
-/// (comma-separated) into token configs. Mints are HEX (arch_program
-/// `Pubkey::from_str` == hex::decode), not base58.
+/// Parse `LABEL:MINT:DECIMALS[:MINT_AMOUNT[:FAUCET_AMOUNT]]` entries
+/// (comma-separated) into token configs. Mints accept base58 or hex.
 ///
 /// The 3-field form stays backward-compatible. Omitted amount fields fall back
 /// to `default_mint_amount` / `default_faucet_amount`. The per-token
@@ -322,8 +334,8 @@ fn parse_tokens(
         let decimals_raw = parts.next().ok_or_else(|| {
             anyhow!("token '{label}' missing decimals (expected LABEL:MINT:DECIMALS)")
         })?;
-        let mint = Pubkey::from_str(mint_raw.trim())
-            .map_err(|e| anyhow!("invalid mint for token '{label}': {e:?}"))?;
+        let mint = parse_pubkey_base58_or_hex(mint_raw.trim())
+            .map_err(|e| anyhow!("invalid mint for token '{label}': {e}"))?;
         let decimals: u8 = decimals_raw
             .trim()
             .parse()
@@ -413,10 +425,16 @@ impl DeployConfig {
             network,
             arch_rpc_url,
 
-            program_key_path: env_or("PROGRAM_KEY_PATH", "keys/autara-stage.key"),
-            oracle_key_path: env_or("ORACLE_KEY_PATH", "keys/autara-pyth-stage.key"),
-            deployer_key_path: env_or("DEPLOYER_KEY_PATH", "keys/autara-deployer.key"),
-            admin_key_path: env_or("ADMIN_KEY_PATH", "keys/autara-admin-stage.key"),
+            program_key_path: env_or(
+                "PROGRAM_KEY_PATH",
+                "autara-deploy/.keys-testnet/program.json",
+            ),
+            oracle_key_path: env_or("ORACLE_KEY_PATH", "autara-deploy/.keys-testnet/oracle.json"),
+            deployer_key_path: env_or(
+                "DEPLOYER_KEY_PATH",
+                "autara-deploy/.keys-testnet/deployer.json",
+            ),
+            admin_key_path: env_or("ADMIN_KEY_PATH", "autara-deploy/.keys-testnet/admin.json"),
 
             program_elf_path: env_or("PROGRAM_ELF_PATH", "target/deploy/autara_program.so"),
             oracle_elf_path: env_or("ORACLE_ELF_PATH", "target/deploy/autara_oracle.so"),

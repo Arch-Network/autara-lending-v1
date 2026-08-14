@@ -15,4 +15,6 @@ pub mod state;
 pub mod token;
 
 #[cfg(test)]
+mod idl_blob_layout;
+#[cfg(test)]
 mod safety_tests;

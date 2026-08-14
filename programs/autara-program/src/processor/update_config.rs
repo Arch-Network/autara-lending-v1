@@ -3,6 +3,7 @@ use autara_lib::ixs::UpdateConfigInstruction;
 
 use crate::{error::LendingProgramResult, ixs::UpdateConfigAccounts};
 
+#[inline(never)]
 pub fn process_update_config(
     accounts: &UpdateConfigAccounts,
     data: &UpdateConfigInstruction,

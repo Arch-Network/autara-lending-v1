@@ -91,6 +91,44 @@ pub fn find_borrow_position_pda(
 }
 
 #[inline(always)]
+pub fn liquidator_whitelist_entry_seed<'a>(
+    market: &'a Pubkey,
+    liquidator: &'a Pubkey,
+) -> [&'a [u8]; 3] {
+    [
+        b"liquidator_whitelist",
+        market.as_ref(),
+        liquidator.as_ref(),
+    ]
+}
+
+#[inline(always)]
+pub fn liquidator_whitelist_entry_seed_with_bump<'a>(
+    market: &'a Pubkey,
+    liquidator: &'a Pubkey,
+    bump: &'a [u8; 1],
+) -> [&'a [u8]; 4] {
+    [
+        b"liquidator_whitelist",
+        market.as_ref(),
+        liquidator.as_ref(),
+        bump,
+    ]
+}
+
+#[inline(always)]
+pub fn find_liquidator_whitelist_entry_pda(
+    program_id: &Pubkey,
+    market: &Pubkey,
+    liquidator: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &liquidator_whitelist_entry_seed(market, liquidator),
+        program_id,
+    )
+}
+
+#[inline(always)]
 pub fn find_market_pda(
     program_id: &Pubkey,
     curator: &Pubkey,
@@ -117,4 +155,35 @@ pub fn global_config_seed_with_bump(bump: &[u8; 1]) -> [&[u8]; 2] {
 #[inline(always)]
 pub fn find_global_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&global_config_seed(), program_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn liquidator_whitelist_pda_is_market_and_liquidator_specific() {
+        let program_id = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+        let liquidator = Pubkey::new_unique();
+
+        let (pda, bump) = find_liquidator_whitelist_entry_pda(&program_id, &market, &liquidator);
+        assert_eq!(
+            Pubkey::create_program_address(
+                &liquidator_whitelist_entry_seed_with_bump(&market, &liquidator, &[bump]),
+                &program_id,
+            )
+            .unwrap(),
+            pda,
+        );
+
+        assert_ne!(
+            pda,
+            find_liquidator_whitelist_entry_pda(&program_id, &Pubkey::new_unique(), &liquidator,).0,
+        );
+        assert_ne!(
+            pda,
+            find_liquidator_whitelist_entry_pda(&program_id, &market, &Pubkey::new_unique(),).0,
+        );
+    }
 }

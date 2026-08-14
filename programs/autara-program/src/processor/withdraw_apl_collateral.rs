@@ -8,6 +8,7 @@ use autara_lib::{
 
 use crate::{error::LendingProgramResult, ixs::WithdrawAplCollateralAccounts};
 
+#[inline(never)]
 pub fn process_withdraw_apl_collateral(
     withdraw_apl_collateral_accounts: &WithdrawAplCollateralAccounts,
     data: &WithdrawAplCollateralInstruction,

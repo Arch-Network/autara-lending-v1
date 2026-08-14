@@ -17,6 +17,7 @@ use autara_lib::{
 };
 use autara_lib::{
     ixs::{UpdateConfigInstruction, UpdateGlobalConfigInstruction},
+    pda::find_liquidator_whitelist_entry_pda,
     token::get_associated_token_address,
 };
 
@@ -87,6 +88,10 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .autara_read_client
             .get_supply_position(market_key, &self.authority_key);
         let mut ixs = Vec::new();
+        ixs.push(self.ensure_ata_ix(
+            &self.authority_key,
+            &market.market().supply_token_info().mint,
+        ));
 
         if supply_position.is_none() {
             let (_, ix) = autara_lib::ixs::create_supply_position_ix(
@@ -131,6 +136,10 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .autara_read_client
             .get_borrow_position(market_key, &self.authority_key);
         let mut ixs = Vec::new();
+        ixs.push(self.ensure_ata_ix(
+            &self.authority_key,
+            &market.market().collateral_token_info().mint,
+        ));
 
         if borrow_position.is_none() {
             let (_, ix) = autara_lib::ixs::create_borrow_position_ix(
@@ -177,15 +186,7 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .get_borrow_position(market_key, &self.authority_key);
         let mut ixs = Vec::new();
 
-        if let Some(ix) = self
-            .maybe_create_ata(
-                &self.authority_key,
-                &market.market().supply_token_info().mint,
-            )
-            .await?
-        {
-            ixs.push(ix);
-        }
+        ixs.push(self.ensure_ata_ix(&self.authority_key, &market.market().supply_token_info().mint));
 
         let (supply_oracle_id, collateral_oracle_id) = market.market().get_oracle_keys();
         let borrow_ix = autara_lib::ixs::borrow_apl_ix(
@@ -222,6 +223,10 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .get_borrow_position(market_key, &self.authority_key);
 
         let mut ixs = Vec::new();
+        ixs.push(self.ensure_ata_ix(
+            &self.authority_key,
+            &market.market().supply_token_info().mint,
+        ));
         let (supply_oracle_id, collateral_oracle_id) = market.market().get_oracle_keys();
         let repay_ix = autara_lib::ixs::repay_apl_ix(
             self.autara_program_id,
@@ -256,6 +261,10 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .autara_read_client
             .get_supply_position(market_key, &self.authority_key);
         let mut ixs = Vec::new();
+        ixs.push(self.ensure_ata_ix(
+            &self.authority_key,
+            &market.market().supply_token_info().mint,
+        ));
         let (supply_oracle_id, collateral_oracle_id) = market.market().get_oracle_keys();
         let withdraw_ix = autara_lib::ixs::withdraw_supply_ix(
             self.autara_program_id,
@@ -291,6 +300,10 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .get_borrow_position(market_key, &self.authority_key);
         let (supply_oracle_id, collateral_oracle_id) = market.market().get_oracle_keys();
         let mut ixs = Vec::new();
+        ixs.push(self.ensure_ata_ix(
+            &self.authority_key,
+            &market.market().collateral_token_info().mint,
+        ));
         let withdraw_ix = autara_lib::ixs::withdraw_apl_collateral_ix(
             self.autara_program_id,
             *market_key,
@@ -333,6 +346,42 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .await
     }
 
+    pub async fn add_whitelisted_liquidator(
+        &self,
+        market_key: &Pubkey,
+        liquidator: Pubkey,
+    ) -> anyhow::Result<(Pubkey, TransactionToSign)> {
+        let (entry, instruction) = autara_lib::ixs::add_whitelisted_liquidator_ix(
+            self.autara_program_id,
+            *market_key,
+            self.authority_key,
+            liquidator,
+        );
+        Ok((
+            entry,
+            self.build_transaction_digest_hash_to_sign(vec![instruction])
+                .await?,
+        ))
+    }
+
+    pub async fn remove_whitelisted_liquidator(
+        &self,
+        market_key: &Pubkey,
+        liquidator: Pubkey,
+    ) -> anyhow::Result<(Pubkey, TransactionToSign)> {
+        let (entry, instruction) = autara_lib::ixs::remove_whitelisted_liquidator_ix(
+            self.autara_program_id,
+            *market_key,
+            self.authority_key,
+            liquidator,
+        );
+        Ok((
+            entry,
+            self.build_transaction_digest_hash_to_sign(vec![instruction])
+                .await?,
+        ))
+    }
+
     pub async fn liquidate(
         &self,
         market_key: &Pubkey,
@@ -346,22 +395,18 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .get_market(market_key)
             .context("market not found")?;
         let mut ixs = vec![];
-        if let Some(ix) = self
-            .maybe_create_ata(&self.authority_key, market.market().supply_vault().mint())
-            .await?
-        {
-            ixs.push(ix);
-        }
-        if let Some(ix) = self
-            .maybe_create_ata(
-                &self.authority_key,
-                market.market().collateral_vault().mint(),
-            )
-            .await?
-        {
-            ixs.push(ix);
-        }
+        ixs.push(self.ensure_ata_ix(&self.authority_key, market.market().supply_vault().mint()));
+        ixs.push(self.ensure_ata_ix(&self.authority_key, market.market().collateral_vault().mint()));
         let (supply_oracle_id, collateral_oracle_id) = market.market().get_oracle_keys();
+        let liquidator_whitelist_entry =
+            (!market.market().config().liquidations_are_permissionless()).then(|| {
+                find_liquidator_whitelist_entry_pda(
+                    &self.autara_program_id,
+                    market_key,
+                    &self.authority_key,
+                )
+                .0
+            });
         let liquidate_ix = autara_lib::ixs::liquidate_ix(
             self.autara_program_id,
             *market_key,
@@ -381,9 +426,83 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             collateral_oracle_id,
             max_borrowed_atoms_to_repay.unwrap_or(u64::MAX),
             min_collateral_atoms_to_receive.unwrap_or(0),
+            liquidator_whitelist_entry,
             ix_callback,
         );
         ixs.push(liquidate_ix);
+        self.build_transaction_digest_hash_to_sign(ixs).await
+    }
+
+    pub async fn begin_capital_sweep(
+        &self,
+        market_key: &Pubkey,
+        borrow_position_key: &Pubkey,
+    ) -> anyhow::Result<TransactionToSign> {
+        let market = self
+            .autara_read_client
+            .get_market(market_key)
+            .context("market not found")?;
+        let mut ixs = vec![];
+        ixs.push(self.ensure_ata_ix(
+            &self.authority_key,
+            market.market().collateral_vault().mint(),
+        ));
+        let (supply_oracle, collateral_oracle) = market.market().get_oracle_keys();
+        ixs.push(autara_lib::ixs::begin_capital_sweep_ix(
+            self.autara_program_id,
+            *market_key,
+            *borrow_position_key,
+            self.authority_key,
+            market
+                .market()
+                .collateral_token_info()
+                .get_associated_token_address(&self.authority_key),
+            *market.market().collateral_vault().vault(),
+            supply_oracle,
+            collateral_oracle,
+        ));
+        self.build_transaction_digest_hash_to_sign(ixs).await
+    }
+
+    pub async fn settle_capital_sweep(
+        &self,
+        market_key: &Pubkey,
+        borrow_position_key: &Pubkey,
+        max_borrowed_atoms_to_repay: Option<u64>,
+        max_collateral_atoms_to_return: Option<u64>,
+    ) -> anyhow::Result<TransactionToSign> {
+        let market = self
+            .autara_read_client
+            .get_market(market_key)
+            .context("market not found")?;
+        let mut ixs = vec![];
+        for mint in [
+            market.market().supply_vault().mint(),
+            market.market().collateral_vault().mint(),
+        ] {
+            ixs.push(self.ensure_ata_ix(&self.authority_key, mint));
+        }
+        let (supply_oracle, collateral_oracle) = market.market().get_oracle_keys();
+        ixs.push(autara_lib::ixs::settle_capital_sweep_ix(
+            self.autara_program_id,
+            *market_key,
+            *borrow_position_key,
+            self.authority_key,
+            market
+                .market()
+                .supply_token_info()
+                .get_associated_token_address(&self.authority_key),
+            market
+                .market()
+                .collateral_token_info()
+                .get_associated_token_address(&self.authority_key),
+            *market.market().supply_vault().vault(),
+            *market.market().collateral_vault().vault(),
+            supply_oracle,
+            collateral_oracle,
+            max_borrowed_atoms_to_repay.unwrap_or(u64::MAX),
+            max_collateral_atoms_to_return.unwrap_or(u64::MAX),
+        ));
         self.build_transaction_digest_hash_to_sign(ixs).await
     }
 
@@ -396,12 +515,7 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .get_market(&market_key)
             .context("market not found")?;
         let mut ixs = vec![];
-        if let Some(ix) = self
-            .maybe_create_ata(&self.authority_key, market.market().supply_vault().mint())
-            .await?
-        {
-            ixs.push(ix);
-        }
+        ixs.push(self.ensure_ata_ix(&self.authority_key, market.market().supply_vault().mint()));
         let ix = reedeem_curator_fees_ix(
             self.autara_program_id,
             *market_key,
@@ -426,12 +540,7 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .context("market not found")?;
         let fee_receiver = self.authority_key;
         let mut ixs = vec![];
-        if let Some(ix) = self
-            .maybe_create_ata(&fee_receiver, &market.market().supply_token_info().mint)
-            .await?
-        {
-            ixs.push(ix);
-        }
+        ixs.push(self.ensure_ata_ix(&fee_receiver, &market.market().supply_token_info().mint));
         let ix = reedeem_protocol_fees_ix(
             self.autara_program_id,
             *market_key,
@@ -481,12 +590,7 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             ixs.push(ix);
         }
         drop(borrow_position);
-        if let Some(ix) = self
-            .maybe_create_ata(&self.authority_key, market.market().supply_vault().mint())
-            .await?
-        {
-            ixs.push(ix);
-        }
+        ixs.push(self.ensure_ata_ix(&self.authority_key, market.market().supply_vault().mint()));
         let (supply_oracle_id, collateral_oracle_id) = market.market().get_oracle_keys();
         let borrow_deposit_ix = autara_lib::ixs::borrow_deposit_apl_ix(
             self.autara_program_id,
@@ -524,21 +628,8 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .autara_read_client
             .get_borrow_position(market_key, &self.authority_key);
         let mut ixs = Vec::new();
-        if let Some(ix) = self
-            .maybe_create_ata(&self.authority_key, market.market().supply_vault().mint())
-            .await?
-        {
-            ixs.push(ix);
-        }
-        if let Some(ix) = self
-            .maybe_create_ata(
-                &self.authority_key,
-                market.market().collateral_vault().mint(),
-            )
-            .await?
-        {
-            ixs.push(ix);
-        }
+        ixs.push(self.ensure_ata_ix(&self.authority_key, market.market().supply_vault().mint()));
+        ixs.push(self.ensure_ata_ix(&self.authority_key, market.market().collateral_vault().mint()));
         let (supply_oracle_id, collateral_oracle_id) = market.market().get_oracle_keys();
         let withdraw_repay_ix = autara_lib::ixs::withdraw_repay_apl_ix(
             self.autara_program_id,
@@ -574,15 +665,7 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .context("market not found")?;
         let oracles = market.market().get_oracle_keys();
         let mut ixs = Vec::new();
-        if let Some(ix) = self
-            .maybe_create_ata(
-                &self.authority_key,
-                market.market().collateral_vault().mint(),
-            )
-            .await?
-        {
-            ixs.push(ix);
-        }
+        ixs.push(self.ensure_ata_ix(&self.authority_key, market.market().collateral_vault().mint()));
         let ix = autara_lib::ixs::socialize_loss_ix(
             self.autara_program_id,
             *market_key,
@@ -611,6 +694,10 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
             .context("market not found")?;
 
         let mut ixs = Vec::new();
+        ixs.push(self.ensure_ata_ix(
+            &self.authority_key,
+            &market.market().supply_token_info().mint,
+        ));
         let supply_ix = autara_lib::ixs::donate_supply_ix(
             self.autara_program_id,
             *market_key,
@@ -646,25 +733,11 @@ impl<'a, T: AutaraReadClient> AutaraTransactionBuilder<'a, T> {
         })
     }
 
-    async fn maybe_create_ata(
-        &self,
-        owner: &Pubkey,
-        mint: &Pubkey,
-    ) -> anyhow::Result<Option<Instruction>> {
+    /// Always prepend idempotent ATA create (Arch ATA data `[1]`). Safe no-op
+    /// when the ATA already exists; avoids RPC check-then-create races.
+    fn ensure_ata_ix(&self, owner: &Pubkey, mint: &Pubkey) -> Instruction {
         let ata = get_associated_token_address(owner, mint);
-        let ix = || Some(create_ata_ix(owner, Some(&ata), owner, mint));
-        match self.arch_client.read_account_info(ata).await {
-            Ok(_) => Ok(None),
-            Err(arch_sdk::ArchError::NotFound(_)) => Ok(ix()),
-            Err(e) => {
-                if let arch_sdk::ArchError::RpcRequestFailed(msg) = &e {
-                    if msg.contains("account is not in database") {
-                        return Ok(ix());
-                    }
-                }
-                return Err(e.into());
-            }
-        }
+        create_ata_ix(owner, Some(&ata), owner, mint)
     }
 }
 

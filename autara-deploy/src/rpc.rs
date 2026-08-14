@@ -1,14 +1,19 @@
 //! Thin wrapper around the Arch SDK clients with the helpers the deploy flow
 //! needs: preflight reachability/balance reads, faucet funding, program
-//! deployment (via `ProgramDeployer`), and send-and-confirm for instructions.
+//! deployment (via local ELF upload sized for the 1232-byte network tx limit),
+//! and send-and-confirm for instructions.
+
+use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
 use arch_program::bitcoin::Network as BitcoinNetwork;
 use arch_program::{bitcoin::key::Keypair, instruction::Instruction, pubkey::Pubkey};
 use arch_sdk::{
     arch_program::sanitized::ArchMessage, build_and_sign_transaction, with_secret_key_file,
-    AsyncArchRpcClient, Config, ProgramDeployer, Status,
+    AsyncArchRpcClient, Config, Status,
 };
+
+use crate::elf_upload;
 
 /// Load a secp256k1 keypair from a file written by `arch-cli` (a hex secret-key
 /// string or a JSON byte array). Returns the keypair and its on-chain `Pubkey`
@@ -18,7 +23,7 @@ pub fn load_keypair(path: &str) -> Result<(Keypair, Pubkey)> {
 }
 
 /// Holds the async RPC client (reads, sends) plus the SDK config used by the
-/// synchronous `ProgramDeployer`.
+/// synchronous ELF uploader.
 pub struct RpcContext {
     pub rpc: AsyncArchRpcClient,
     config: Config,
@@ -89,13 +94,14 @@ impl RpcContext {
             .map_err(|e| anyhow!("faucet funding failed: {e}"))
     }
 
-    /// Deploy (or resume the deploy of) a program ELF using the SDK's
-    /// `ProgramDeployer`, mirroring the repo's existing deploy binary.
+    /// Deploy (or resume the deploy of) a program ELF.
     ///
-    /// `ProgramDeployer` is SYNCHRONOUS and drives its own blocking client, so
-    /// this MUST be called from outside any active async runtime (the caller
-    /// runs it between `block_on` sections). It is idempotent: an
-    /// already-deployed program is treated as success.
+    /// Uses a local uploader that sizes loader `Write` chunks for the Arch
+    /// network's 1232-byte transaction limit (stock `arch_sdk` 0.6.2
+    /// `ProgramDeployer` still chunks against 10240 and fails on refreshed
+    /// testnet). Synchronous / blocking — call outside an active async
+    /// runtime (between `block_on` sections). Idempotent when the on-chain
+    /// ELF already matches.
     pub fn deploy_program(
         &self,
         program_name: String,
@@ -103,11 +109,12 @@ impl RpcContext {
         authority_kp: Keypair,
         elf_path: String,
     ) -> Result<()> {
-        match ProgramDeployer::new(&self.config).try_deploy_program(
-            program_name,
+        match elf_upload::deploy_program_elf(
+            &self.config,
+            &program_name,
             program_kp,
             authority_kp,
-            &elf_path,
+            Path::new(&elf_path),
         ) {
             Ok(_) => Ok(()),
             Err(e) => {

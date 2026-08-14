@@ -9,14 +9,18 @@ use crate::{
         redeem_protocol_fees::RedeemProtocolFeesAccounts, *,
     },
     processor::{
-        borrow_apl::process_borrow_apl, borrow_deposit_apl::process_borrow_deposit_apl,
+        add_whitelisted_liquidator::process_add_whitelisted_liquidator,
+        begin_capital_sweep::process_begin_capital_sweep, borrow_apl::process_borrow_apl,
+        borrow_deposit_apl::process_borrow_deposit_apl,
         create_borrow_position::process_create_borrow_position,
         create_global_config::process_create_global_config, create_market::process_create_market,
         create_supply_position::process_create_supply_position,
         deposit_apl_collateral::process_deposit_apl_collateral,
         donate_supply::process_donate_supply, liquidate::process_liquidate,
         redeem_curator_fees::process_redeem_curator_fees,
-        redeem_protocol_fees::process_redeem_protocol_fees, repay_apl::process_repay_apl,
+        redeem_protocol_fees::process_redeem_protocol_fees,
+        remove_whitelisted_liquidator::process_remove_whitelisted_liquidator,
+        repay_apl::process_repay_apl, settle_capital_sweep::process_settle_capital_sweep,
         socialize_loss::process_socialize_loss, supply_apl::process_supply_apl,
         update_config::process_update_config, update_global_config::process_update_global_config,
         withdraw_apl_collateral::process_withdraw_apl_collateral,
@@ -47,11 +51,27 @@ pub fn process_instruction<'a>(
     autara_process_instruction(program_id, accounts, instruction_data).map_err(Into::into)
 }
 
+// Every `process_*` handler and `*Accounts::from_accounts` constructor is
+// `#[inline(never)]`: inlined here they push this dispatcher past the fixed
+// 4KB SBPF stack frame, which does not fault — over-frame spill slots silently
+// overlap the next call frame and get clobbered by the first CPI (shipped once
+// as an access violation mid-BorrowDepositApl). cargo-build-sbf only warns on
+// this; autara-deploy/scripts/build-sbf-checked.sh turns it into a build error.
 pub fn autara_process_instruction<'a>(
     program_id: &Pubkey,
     accounts: &'a [AccountInfo<'a>],
     instruction_data: &[u8],
 ) -> LendingProgramResult {
+    // On-chain IDL account instructions. Routed before the AurataInstruction
+    // decode via the 8-byte `anchor:idl` selector, which can never collide with
+    // the 1-byte AurataInstruction tags (0..=21). See processor::idl.
+    if crate::processor::idl::is_idl_instruction(instruction_data) {
+        return crate::processor::idl::process_idl_instruction(
+            program_id,
+            accounts,
+            &instruction_data[crate::processor::idl::IDL_IX_TAG_LE.len()..],
+        );
+    }
     let mut accounts_iter = &mut accounts.iter();
     let clock = utils::clock();
     let ix = <Box<AurataInstruction>>::deserialize(&mut &instruction_data[..])
@@ -207,6 +227,28 @@ pub fn autara_process_instruction<'a>(
             msg!("Processing DonateSupply instruction");
             let donate_supply_accounts = DonateSupplyAccounts::from_accounts(&mut accounts_iter)?;
             process_donate_supply(&donate_supply_accounts, data, accounts, program_id, &clock)
+        }
+        AurataInstruction::BeginCapitalSweep(data) => {
+            msg!("Processing BeginCapitalSweep instruction");
+            let sweep_accounts = BeginCapitalSweepAccounts::from_accounts(&mut accounts_iter)?;
+            process_begin_capital_sweep(&sweep_accounts, data, accounts, program_id, &clock)
+        }
+        AurataInstruction::SettleCapitalSweep(data) => {
+            msg!("Processing SettleCapitalSweep instruction");
+            let settle_accounts = SettleCapitalSweepAccounts::from_accounts(&mut accounts_iter)?;
+            process_settle_capital_sweep(&settle_accounts, data, accounts, program_id, &clock)
+        }
+        AurataInstruction::AddWhitelistedLiquidator(data) => {
+            msg!("Processing AddWhitelistedLiquidator instruction");
+            let add_accounts =
+                AddWhitelistedLiquidatorAccounts::from_accounts(&mut accounts_iter, data)?;
+            process_add_whitelisted_liquidator(&add_accounts, data, accounts, program_id)
+        }
+        AurataInstruction::RemoveWhitelistedLiquidator(data) => {
+            msg!("Processing RemoveWhitelistedLiquidator instruction");
+            let remove_accounts =
+                RemoveWhitelistedLiquidatorAccounts::from_accounts(&mut accounts_iter, data)?;
+            process_remove_whitelisted_liquidator(&remove_accounts, data, accounts, program_id)
         }
         AurataInstruction::Log => {
             let _check_accounts = LogAccounts::from_accounts(&mut accounts_iter)?;

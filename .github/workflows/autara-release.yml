@@ -1,0 +1,84 @@
+# Autara release chain: readiness → program+oracle upgrade dry-run → optional real upgrade.
+#
+# Operator flow (pre-mainnet):
+#   1. Actions → autara-release → Run workflow
+#   2. Choose network (testnet|mainnet) and readiness_mode (testnet|mainnet-safe)
+#   3. Leave run_real_upgrade=false for the first pass (dry-run only after readiness)
+#   4. Review readiness artifacts + upgrade dry-run summary
+#   5. Re-run with run_real_upgrade=true (and mainnet_confirm='DEPLOY MAINNET' on mainnet)
+#
+# Real upgrades still require the per-network GitHub Environment (reviewers) and
+# the typed mainnet confirmation gate inside _autara-action.yml.
+
+name: autara-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Upgrade target network'
+        type: choice
+        required: true
+        options:
+          - testnet
+          - mainnet
+        default: testnet
+      readiness_mode:
+        description: 'Readiness mode (use mainnet-safe when network=mainnet)'
+        type: choice
+        required: true
+        options:
+          - testnet
+          - mainnet-safe
+        default: testnet
+      probe_pusher_health:
+        description: 'Optional pusher /health URL probed during readiness'
+        type: string
+        required: false
+        default: ''
+      run_real_upgrade:
+        description: 'After dry-run, also perform the REAL program+oracle upgrade'
+        type: boolean
+        default: false
+      mainnet_confirm:
+        description: "Required when network=mainnet and run_real_upgrade=true: type 'DEPLOY MAINNET'"
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autara-action-${{ github.event.inputs.network }}
+  cancel-in-progress: false
+
+jobs:
+  readiness:
+    uses: ./.github/workflows/autara-readiness.yml
+    secrets: inherit
+    with:
+      mode: ${{ inputs.readiness_mode }}
+      probe_pusher_health: ${{ inputs.probe_pusher_health }}
+
+  upgrade_dry_run:
+    needs: readiness
+    uses: ./.github/workflows/_autara-action.yml
+    secrets: inherit
+    with:
+      action: upgrade
+      network: ${{ inputs.network }}
+      dry_run: true
+      mainnet_confirm: ''
+
+  upgrade_real:
+    if: ${{ inputs.run_real_upgrade }}
+    needs:
+      - readiness
+      - upgrade_dry_run
+    uses: ./.github/workflows/_autara-action.yml
+    secrets: inherit
+    with:
+      action: upgrade
+      network: ${{ inputs.network }}
+      dry_run: false
+      mainnet_confirm: ${{ inputs.mainnet_confirm }}

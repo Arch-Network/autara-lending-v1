@@ -20,7 +20,7 @@
 # run (and the upgrade action overrides OUTPUT_PATH itself).
 
 # Preserve the CI-provided key paths: sourcing the env file below would
-# otherwise clobber them with the committed keys/ defaults.
+# otherwise clobber them with the env-file defaults (.keys-testnet paths).
 __kp_program="${PROGRAM_KEY_PATH:-}"
 __kp_oracle="${ORACLE_KEY_PATH:-}"
 __kp_deployer="${DEPLOYER_KEY_PATH:-}"

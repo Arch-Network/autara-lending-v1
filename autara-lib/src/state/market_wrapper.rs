@@ -7,7 +7,7 @@ use crate::{
     event::{DoubleMarketTransactionEvent, SingleMarketTransactionEvent},
     operation::liquidation::LiquidationResultWithBonus,
     oracle::{oracle_price::OracleRate, oracle_provider::{AccountView, OracleLoader}},
-    state::borrow_position::LiquidationResultWithCtx,
+    state::borrow_position::{CapitalSweepSettlementResult, LiquidationResultWithCtx},
 };
 
 use super::{
@@ -281,6 +281,32 @@ impl<M: DerefMut<Target = Market>> MarketWrapper<M> {
             &self.collateral_oracle,
             &self.supply_oracle,
             max_repay_atoms,
+        )
+    }
+
+    pub fn begin_capital_sweep(
+        &mut self,
+        borrow_position: &mut BorrowPosition,
+    ) -> LendingResult<BorrowPositionHealth> {
+        self.market.begin_capital_sweep(
+            borrow_position,
+            &self.collateral_oracle,
+            &self.supply_oracle,
+        )
+    }
+
+    pub fn settle_capital_sweep(
+        &mut self,
+        borrow_position: &mut BorrowPosition,
+        max_repay_atoms: u64,
+        max_collateral_atoms_to_return: u64,
+    ) -> LendingResult<CapitalSweepSettlementResult> {
+        self.market.settle_capital_sweep(
+            borrow_position,
+            &self.collateral_oracle,
+            &self.supply_oracle,
+            max_repay_atoms,
+            max_collateral_atoms_to_return,
         )
     }
 

@@ -12,6 +12,7 @@ use crate::{
     error::LendingProgramResult, ixs::CreateMarketAccounts, state::AutaraUninitializedAccount,
 };
 
+#[inline(never)]
 pub fn process_create_market(
     create_market_accounts: &CreateMarketAccounts,
     data: &CreateMarketInstruction,

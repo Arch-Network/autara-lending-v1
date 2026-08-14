@@ -7,6 +7,71 @@ use autara_lib::{
 use crate::fixture::autara_fixture::{AutaraFixture, BTC, UNHEALTHY_LTV, USDC};
 
 #[tokio::test]
+async fn curator_can_manage_multiple_liquidators_and_restore_permissionless_mode() {
+    let mut fixture = AutaraFixture::new().await;
+    let market = fixture.create_market().await;
+    let liquidator_one = *fixture.user_client().signer_pubkey();
+    let liquidator_two = *fixture.user_two_client().signer_pubkey();
+
+    fixture
+        .curator_client()
+        .add_whitelisted_liquidator(&market, liquidator_one)
+        .await
+        .unwrap();
+    fixture
+        .curator_client()
+        .add_whitelisted_liquidator(&market, liquidator_two)
+        .await
+        .unwrap();
+    fixture.reload().await;
+    assert_eq!(
+        fixture
+            .user_client()
+            .read_client()
+            .get_market(&market)
+            .unwrap()
+            .market()
+            .config()
+            .active_whitelisted_liquidators(),
+        2
+    );
+
+    fixture
+        .curator_client()
+        .remove_whitelisted_liquidator(&market, liquidator_one)
+        .await
+        .unwrap();
+    fixture.reload().await;
+    assert_eq!(
+        fixture
+            .user_client()
+            .read_client()
+            .get_market(&market)
+            .unwrap()
+            .market()
+            .config()
+            .active_whitelisted_liquidators(),
+        1
+    );
+
+    fixture
+        .curator_client()
+        .remove_whitelisted_liquidator(&market, liquidator_two)
+        .await
+        .unwrap();
+    fixture.reload().await;
+    let market_state = fixture
+        .user_client()
+        .read_client()
+        .get_market(&market)
+        .unwrap();
+    assert!(market_state
+        .market()
+        .config()
+        .liquidations_are_permissionless());
+}
+
+#[tokio::test]
 async fn cant_liquidate_healthy_position() {
     let mut fixture = AutaraFixture::new().await;
     let market = fixture.create_market().await;
@@ -286,6 +351,7 @@ async fn cant_liquidate_twice_with_callback_unhealthy_position() {
         oracles.1,
         u64::MAX,
         0,
+        None,
         None,
     );
     let err = fixture
