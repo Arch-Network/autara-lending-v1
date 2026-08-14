@@ -13,6 +13,7 @@ use crate::{
     state::AutaraUninitializedAccount,
 };
 
+#[inline(never)]
 pub fn process_create_borrow_position(
     create_borrow_position_accounts: &CreateBorrowPositionAccounts,
     data: &CreateBorrowPositionInstruction,

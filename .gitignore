@@ -9,10 +9,21 @@ user.key
 .DS_Store
 .env
 
+# Key material: never track keypairs. Working copies live on disk only.
+# (tokens.json stays tracked — it holds public mint/authority pubkeys + paths.)
+keys/
+*.key
+
 # Deploy tooling: gitignored key directories (autara-deploy). NEVER commit keys.
 .keys-testnet/
 .keys-mainnet/
 .keys-*/
 
+# Failing-case seeds proptest writes out on failure; local artifacts, not sources.
+proptest-regressions/
+
 # Local planning artifacts must never be committed.
 /docs/superpowers/
+
+# Rollback ELFs dumped by backup_program_elf — large binaries, never committed.
+/backups/

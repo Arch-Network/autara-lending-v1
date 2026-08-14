@@ -40,19 +40,22 @@ cargo build
 
 ### Keys
 
-The `keys/` directory contains key files used by the protocol:
+**Do not commit keypairs.** `keys/` and `*.key` are gitignored. Fresh testnet
+deploy keys live under the gitignored `autara-deploy/.keys-testnet/` directory
+(see [`docs/key-hygiene.md`](docs/key-hygiene.md)).
 
-| Key file | Purpose |
+| Role (file under `.keys-testnet/`) | Purpose |
 |---|---|
-| `autara-stage.key` | Autara program ID (derived from this key) |
-| `autara-pyth-stage.key` | Oracle program ID (derived from this key) |
-| `autara-admin-stage.key` | Default admin key for development |
-| `autara-deployer.key` | Program deployer authority |
-| `autara-cli-signer.key` | Default CLI signer (set in `.env` as `AUTARA_SIGNER_KEY`) |
-| `autara-token-authority.key` | Mint authority for tokens created via `token setup` |
-| `token-btc.key` | Fixed keypair for the BTC token mint |
-| `token-usdc.key` | Fixed keypair for the USDC token mint |
-| `token-eth.key` | Fixed keypair for the ETH token mint |
+| `program.json` | Autara program account keypair (pubkey becomes program id) |
+| `oracle.json` | Oracle program account keypair |
+| `admin.json` | Default admin key for development / global-config |
+| `deployer.json` | Program upgrade authority + deploy payer |
+| `cli-signer.key` | Default CLI signer (set in `.env` as `AUTARA_SIGNER_KEY`) |
+| `token-authority.key` | Mint authority for tokens created via `token setup` |
+| `token-btc.key` / `token-usdc.key` / `token-eth.key` | Mint account keypairs (for a future redeploy) |
+
+On-chain rotation with these keys is **deferred** — generate locally first; do
+not upgrade/redeploy until explicitly green-lit.
 
 ### Local environment
 
@@ -134,8 +137,8 @@ cargo run --bin autara-server -- --tokens tokens.json
 Options:
 
 - `--tokens <PATH>` — **(required)** Path to `tokens.json` config
-- `--program-id <HEX>` — Autara program ID (defaults to `keys/autara-stage.key` address)
-- `--oracle-program-id <HEX>` — Oracle program ID (defaults to `keys/autara-pyth-stage.key` address)
+- `--program-id <HEX>` — Autara program ID (defaults to the configured program key pubkey)
+- `--oracle-program-id <HEX>` — Oracle program ID (defaults to the configured oracle key pubkey)
 - `--signer <PATH>` — Signer key file (falls back to `AUTARA_SIGNER_KEY` env var)
 - `--arch-node <URL>` — Arch node URL (default: `https://rpc.testnet.arch.network`)
 - `--network <NETWORK>` — Bitcoin network (default: `testnet`)

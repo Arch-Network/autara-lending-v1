@@ -47,9 +47,9 @@ fi
 # Skip with SKIP_BUILD=1 if you already have fresh builds.
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   echo "Building autara-program (cargo-build-sbf --features entrypoint)..."
-  ( cd programs/autara-program && cargo-build-sbf --features entrypoint )
+  ./autara-deploy/scripts/build-sbf-checked.sh programs/autara-program
   echo "Building autara-oracle (cargo-build-sbf --features entrypoint)..."
-  ( cd programs/autara-oracle && cargo-build-sbf --features entrypoint )
+  ./autara-deploy/scripts/build-sbf-checked.sh programs/autara-oracle
 else
   echo "SKIP_BUILD=1 set; using existing target/deploy/*.so"
 fi

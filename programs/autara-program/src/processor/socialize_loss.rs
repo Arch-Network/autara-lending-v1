@@ -8,6 +8,7 @@ use autara_lib::{
 
 use crate::{error::LendingProgramResult, ixs::SocializeLossAccounts};
 
+#[inline(never)]
 pub fn process_socialize_loss(
     socialize_loss_accounts: &SocializeLossAccounts,
     _data: &SocializeLossInstruction,

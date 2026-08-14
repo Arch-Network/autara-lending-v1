@@ -1,0 +1,12 @@
+# The integration suite runs against live Arch testnet: tests faucet accounts and
+# create markets, then immediately use them. When the RPC node has not caught up,
+# the fixture fails with "Account not found" or "fee payer must be signer,
+# writable, system-owned, and present".
+#
+# Retrying is the right response, but it has to wait. Immediate retries just
+# re-read the same missing state — a run with fixed retries and no delay burned
+# all 4 attempts on one test in under 2 seconds. Back off so each attempt gives
+# propagation a chance, which also keeps a real regression distinguishable: it
+# still fails every attempt, just not because we asked too fast.
+[profile.default]
+retries = { backoff = "exponential", count = 3, delay = "5s", max-delay = "30s", jitter = true }

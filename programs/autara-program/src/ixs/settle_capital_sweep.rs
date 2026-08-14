@@ -27,6 +27,7 @@ pub struct SettleCapitalSweepAccounts<'a, 'b> {
 }
 
 impl<'a, 'b> SettleCapitalSweepAccounts<'a, 'b> {
+    #[inline(never)]
     pub fn from_accounts(
         accounts: &mut impl Iterator<Item = &'b AccountInfo<'a>>,
     ) -> LendingProgramResult<Self>

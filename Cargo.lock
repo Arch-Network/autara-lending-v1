@@ -249,6 +249,7 @@ dependencies = [
  "apl-token",
  "arch_sdk",
  "async-trait",
+ "autara-deploy",
  "autara-lib",
  "autara-program",
  "autara-pyth",
@@ -260,6 +261,7 @@ dependencies = [
  "clap",
  "dashmap",
  "dotenvy",
+ "flate2",
  "futures",
  "hex 0.4.3",
  "jsonrpsee",
@@ -348,6 +350,7 @@ dependencies = [
 name = "autara-program"
 version = "0.1.0"
 dependencies = [
+ "apl-associated-token-account",
  "apl-token",
  "arch_program",
  "autara-lib",
@@ -357,6 +360,8 @@ dependencies = [
  "bytemuck",
  "hex-literal",
  "num_enum",
+ "proptest",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -369,6 +374,7 @@ dependencies = [
  "borsh",
  "bytemuck",
  "num_enum",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

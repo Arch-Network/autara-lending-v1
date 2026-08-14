@@ -1,8 +1,8 @@
 build-program-autara:
-	cd programs/autara-program && cargo-build-sbf --features entrypoint
+	./autara-deploy/scripts/build-sbf-checked.sh programs/autara-program
 
 build-program-oracle:
-	cd programs/autara-oracle && cargo-build-sbf --features entrypoint
+	./autara-deploy/scripts/build-sbf-checked.sh programs/autara-oracle
 
 program-test:
 	cargo nextest run --no-fail-fast -j 24 -p autara-integration-tests

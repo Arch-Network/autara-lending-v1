@@ -21,6 +21,7 @@ pub struct DepositAplCollateralAccounts<'a, 'b> {
 }
 
 impl<'a, 'b> DepositAplCollateralAccounts<'a, 'b> {
+    #[inline(never)]
     pub fn from_accounts(
         accounts: &mut impl Iterator<Item = &'b AccountInfo<'a>>,
     ) -> LendingProgramResult<Self>
