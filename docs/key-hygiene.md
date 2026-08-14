@@ -2,15 +2,17 @@
 
 ## Status
 
-**Repo hygiene only.** Committed keypairs under `keys/` were treated as
-permanently compromised. This change stops tracking them going forward and
-points deploy env files at gitignored paths.
+**Repo hygiene done.** Committed keypairs under `keys/` were treated as
+permanently compromised. Tracking stopped; deploy env files point at gitignored
+paths under `autara-deploy/.keys-testnet/`.
 
-**On-chain rotation / redeploy is DEFERRED** until an operator explicitly
-green-lights it. Do **not** transfer upgrade authority, redeploy programs,
-create markets, or faucet-fund accounts as part of this hygiene step.
+**On-chain redeploy (testnet):** completed 2026-08-14 with the fresh
+`.keys-testnet/` keypairs. See `docs/testnet-deployment.md` for the new public
+program/oracle/config/market addresses. The legacy compromised ids
+(`53def2dc…` / `eee682c2…`) were **not** reused as program ids or as upgrade
+authorities for the new deploy.
 
-**Git history rewrite is also deferred** (separate coordinated step: filter-repo
+**Git history rewrite is still deferred** (separate coordinated step: filter-repo
 / BFG + force-push). Untracking does not remove secrets from past commits.
 
 ## Where keys live
@@ -18,7 +20,7 @@ create markets, or faucet-fund accounts as part of this hygiene step.
 | Location | Tracked? | Purpose |
 |---|---|---|
 | `keys/` | **No** (gitignored) | Legacy path; do not commit. Local copies may remain for emergency ops on the live compromised deployment until rotation. |
-| `autara-deploy/.keys-testnet/` | **No** (gitignored) | Fresh testnet keypairs for a future redeploy. |
+| `autara-deploy/.keys-testnet/` | **No** (gitignored) | Fresh testnet keypairs used for the 2026-08-14 redeploy. |
 | `autara-deploy/.keys-mainnet/` / `.keys-*/` | **No** | Same pattern for other networks. |
 | `tokens.json` | Yes | Public mint/authority **pubkeys** + key **paths** only — never secret bytes. |
 

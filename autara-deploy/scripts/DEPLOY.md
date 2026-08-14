@@ -63,10 +63,11 @@ checks against a **compiled-in id** (`autara_program::id()` =
 from the deployed program key. So the deployed program key's pubkey **must
 equal** `autara_program::id()`.
 
-- The live/stage program key's pubkey equals `autara_program::id()`
-  (`53def2dc…`). Fresh keys under `autara-deploy/.keys-testnet/` will **not**
-  match until you run `sync-program-id.sh` + rebuild (part of the deferred
-  on-chain redeploy — see `docs/key-hygiene.md`).
+- The live testnet program key's pubkey equals `autara_program::id()`
+  (synced to the 2026-08-14 redeploy key under `.keys-testnet/`; see
+  `docs/testnet-deployment.md`). Fresh keys under
+  `autara-deploy/.keys-testnet/` must match `id()` after
+  `sync-program-id.sh` + rebuild.
 - If you deploy with a different key, the tool warns (fatal on a real run). To
   use a new key you must update `id()` in `programs/autara-program/src/lib.rs`
   and rebuild the ELF.
@@ -80,8 +81,8 @@ The `autara-oracle` program is position-independent (it uses the runtime
 - `keys/` and `*.key` are gitignored; never commit keypairs.
 - Keep rotated/fresh testnet keys in `autara-deploy/.keys-testnet/` (also
   gitignored via `.keys-*/`).
-- `autara.testnet.env` points at `.keys-testnet/`. On-chain use of those keys is
-  deferred until an operator green-lights rotation/redeploy.
+- `autara.testnet.env` points at `.keys-testnet/`. Testnet on-chain redeploy with
+  those keys completed 2026-08-14 (see `docs/testnet-deployment.md`).
 
 ## Per-network differences
 
