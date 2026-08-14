@@ -24,3 +24,8 @@ num_enum.workspace = true
 hex-literal.workspace = true
 bs58.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+
+apl-associated-token-account.workspace = true
+proptest.workspace = true

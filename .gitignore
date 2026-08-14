@@ -19,6 +19,9 @@ keys/
 .keys-mainnet/
 .keys-*/
 
+# Failing-case seeds proptest writes out on failure; local artifacts, not sources.
+proptest-regressions/
+
 # Local planning artifacts must never be committed.
 /docs/superpowers/
 
