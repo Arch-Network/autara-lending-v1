@@ -80,30 +80,39 @@ fn main() -> anyhow::Result<()> {
     );
     println!("  data length: {} bytes", acc.data.len());
 
-    if acc.data.len() >= LOADER_HEADER_LEN {
-        // bpf_loader::LoaderState: authority(32) then status(u64 LE), ELF at 40.
-        let onchain_authority = Pubkey::from_slice(&acc.data[0..32]);
-        let status = u64::from_le_bytes(acc.data[32..40].try_into().unwrap());
-        println!();
-        println!("loader header (arch_program::bpf_loader::LoaderState):");
-        println!("  authority_or_next_version: {}", b58(&onchain_authority));
-        println!("  status {status}: {}", status_str(status));
-        // Sanity: ELF magic 0x7f should sit right after the 40-byte header.
-        println!(
-            "  byte[40] = 0x{:02x} (0x7f = ELF magic, confirms 40-byte header)",
-            acc.data[LOADER_HEADER_LEN]
-        );
-        println!();
-        println!(
-            "PRECONDITION 1 — upgradeable (not finalized): {}",
-            status != 2
-        );
-        println!(
-            "PRECONDITION 2 — authority == deployer key:   {}",
-            onchain_authority == expected_authority
-        );
-    } else {
-        println!("(account smaller than a loader header; inspect with arch-cli instead.)");
+    // `>` not `>=`: byte[40] is read below, which needs at least 41 bytes. A
+    // retracted-and-truncated program account is exactly LOADER_HEADER_LEN long,
+    // and that is precisely when this diagnostic gets run.
+    if acc.data.len() <= LOADER_HEADER_LEN {
+        println!("(account smaller than a loader header + ELF; inspect with arch-cli instead.)");
+        anyhow::bail!("program account holds no ELF ({} bytes)", acc.data.len());
+    }
+
+    // bpf_loader::LoaderState: authority(32) then status(u64 LE), ELF at 40.
+    let onchain_authority = Pubkey::from_slice(&acc.data[0..32]);
+    let status = u64::from_le_bytes(acc.data[32..40].try_into().unwrap());
+    println!();
+    println!("loader header (arch_program::bpf_loader::LoaderState):");
+    println!("  authority_or_next_version: {}", b58(&onchain_authority));
+    println!("  status {status}: {}", status_str(status));
+    // Sanity: ELF magic 0x7f should sit right after the 40-byte header.
+    println!(
+        "  byte[40] = 0x{:02x} (0x7f = ELF magic, confirms 40-byte header)",
+        acc.data[LOADER_HEADER_LEN]
+    );
+    println!();
+
+    let upgradeable = status != 2;
+    let authority_matches = onchain_authority == expected_authority;
+    println!("PRECONDITION 1 — upgradeable (not finalized): {upgradeable}");
+    println!("PRECONDITION 2 — authority == deployer key:   {authority_matches}");
+
+    // Exit non-zero so this is an actual gate: testnet-idl-upgrade.sh runs under
+    // `set -e` and would otherwise sail past a finalized program or a mismatched
+    // authority and only discover it when the retract tx fails — with the
+    // upgrade already under way.
+    if !upgradeable || !authority_matches {
+        anyhow::bail!("preconditions not met; refusing to report success");
     }
     Ok(())
 }

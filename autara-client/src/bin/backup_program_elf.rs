@@ -43,6 +43,18 @@ fn main() -> anyhow::Result<()> {
     );
     let elf = &acc.data[offset..];
 
+    // Never overwrite a good backup with a half-written one. A non-executable
+    // program means an upgrade is in flight (retracted, ELF partially rewritten),
+    // and the operator is told to re-run the upgrade script — which calls this
+    // first. Clobbering here would destroy the only rollback target for a live,
+    // fund-holding program. Skip rather than fail, so the re-run can proceed.
+    if !acc.is_executable && Path::new(&out).exists() {
+        println!(
+            "program is not executable (upgrade in progress) — preserving existing backup at {out}"
+        );
+        return Ok(());
+    }
+
     if let Some(parent) = Path::new(&out).parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
