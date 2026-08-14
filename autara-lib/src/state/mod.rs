@@ -39,7 +39,6 @@ const fn validate_all_different_sizes<const M: usize>(sizes: [usize; M]) {
 mod tests {
     use crate::{
         constant::SECONDS_PER_YEAR,
-        error::LendingError,
         interest_rate::interest_rate_kind::InterestRateCurveKind,
         oracle::oracle_config::tests::{default_btc_oracle_rate, default_usd_oracle_rate},
         state::{
@@ -63,7 +62,7 @@ mod tests {
     }
 
     #[test]
-    fn poc_adaptive_curve_can_perma_brick_market_after_long_idle() {
+    fn adaptive_curve_survives_long_idle_at_high_utilisation() {
         // Setup a market using the adaptive curve and allow 100% utilisation for the test.
         let mut market = create_empty_btc_usdc_market();
         market
@@ -118,29 +117,24 @@ mod tests {
             .last_update_unix_timestamp;
         assert_eq!(last_update_before, 1);
 
-        // Simulate a long period with no successful sync, then attempt to sync again at ~2y later.
-        // With utilisation = 100%, err = 1 and linear_adaptation ≈ 50 * years_elapsed.
-        // After ~1.1y, linear_adaptation > 55.26 and `checked_exp()` errors.
+        // Regression test for issue #47: with `linear_adaptation` clamped, sync_clock must
+        // succeed even after ~2y idle at 99% utilisation.
+        // Previously this returned `Err(InvalidExpArg)` and permanently bricked the market
+        // because `last_update_unix_timestamp` only advances on success.
         let brick_timestamp = last_update_before + (2 * SECONDS_PER_YEAR) as i64;
-        assert_eq!(
-            market.sync_clock(brick_timestamp).unwrap_err(),
-            LendingError::InvalidExpArg
-        );
+        market.sync_clock(brick_timestamp).unwrap();
 
-        // `last_update_unix_timestamp` is not advanced on error → market remains stuck.
+        // `last_update_unix_timestamp` advances → market is NOT permanently bricked.
         let last_update_after = market
             .supply_vault()
             .get_summary()
             .unwrap()
             .last_update_unix_timestamp;
-        assert_eq!(last_update_after, last_update_before);
+        assert_eq!(last_update_after, brick_timestamp);
 
-        // Any later attempt still fails since elapsed grows while `last_update_unix_timestamp` stays fixed.
-        assert_eq!(
-            market
-                .sync_clock(brick_timestamp + SECONDS_PER_YEAR as i64)
-                .unwrap_err(),
-            LendingError::InvalidExpArg
-        );
+        // Subsequent syncs also succeed.
+        market
+            .sync_clock(brick_timestamp + SECONDS_PER_YEAR as i64)
+            .unwrap();
     }
 }
