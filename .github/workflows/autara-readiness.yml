@@ -117,15 +117,14 @@ jobs:
       # intermittently see "Account not found" / "market not found" while state
       # propagates on the RPC node. Retries absorb that; a real regression still
       # fails every attempt. Mirrors `make program-test` (nextest, no-fail-fast).
+      #
+      # Retry count and backoff come from .config/nextest.toml. Do not pass
+      # --retries or set NEXTEST_RETRIES here: both override the profile and drop
+      # the backoff, which is the part that actually makes retrying work.
       - name: Integration tests (live testnet)
-        env:
-          NEXTEST_RETRIES: ${{ vars.READINESS_NEXTEST_RETRIES || '3' }}
         run: |
           set -euo pipefail
-          cargo nextest run \
-            --no-fail-fast \
-            --retries "$NEXTEST_RETRIES" \
-            -p autara-integration-tests
+          cargo nextest run --no-fail-fast -p autara-integration-tests
 
       # Live socialization proof always uses the disposable stage market harness
       # (never touches shared aUSD/aBTC). Safe as a pre-mainnet gate.

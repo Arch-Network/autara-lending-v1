@@ -80,10 +80,11 @@ pass "unit tests (autara-lib, autara-program)"
 # The integration suite runs against LIVE Arch testnet, so cases intermittently
 # fail while faucet-funded accounts / fresh markets propagate on the RPC node.
 # Retry them like `make program-test` does.
+# Retry count and backoff come from .config/nextest.toml; passing --retries here
+# would override the profile and drop the backoff.
 echo "== 1b) Integration tests (live testnet) =="
-NEXTEST_RETRIES="${NEXTEST_RETRIES:-3}"
 if command -v cargo-nextest >/dev/null 2>&1; then
-  cargo nextest run --no-fail-fast --retries "$NEXTEST_RETRIES" -p autara-integration-tests
+  cargo nextest run --no-fail-fast -p autara-integration-tests
 else
   echo "cargo-nextest not found (install: curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C \"\${CARGO_HOME:-\$HOME/.cargo}/bin\")"
   echo "Falling back to cargo test WITHOUT retries; live-testnet flakes are likely."
