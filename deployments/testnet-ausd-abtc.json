@@ -1,0 +1,50 @@
+{
+  "network": "testnet",
+  "arch_rpc_url": "https://rpc.testnet.arch.network",
+  "deployed_at_unix": 1786543808,
+  "program_id": "53def2dc8516302842b10e356914d2a5f6b33425ba42aec684f706aa1cf64192",
+  "oracle_id": "eee682c27db375bebbc17ed9a76aaa935c8b72bc7de50d736f03e2dfbed84b15",
+  "build_commit": "b10eeaa",
+  "program_elf_path": "target/deploy/autara_program.so",
+  "program_elf_sha256": null,
+  "oracle_elf_path": "target/deploy/autara_oracle.so",
+  "oracle_elf_sha256": null,
+  "deployer": "5247da872ea2c9dd563072a70c552c2e09da5671035e970c2c9ba7161584b1de",
+  "admin": "9fe2d81600314dc3db735bd6924b655b6a515a4de6f084cbbd23139e9da924ec",
+  "fee_receiver": "9fe2d81600314dc3db735bd6924b655b6a515a4de6f084cbbd23139e9da924ec",
+  "protocol_fee_share_bps": 5000,
+  "global_config": null,
+  "tokens": [
+    {
+      "label": "aUSD",
+      "mint": "55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45",
+      "decimals": 6,
+      "mint_amount": 1000000000000,
+      "faucet_amount": 1000000000000
+    },
+    {
+      "label": "aBTC",
+      "mint": "1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9",
+      "decimals": 8,
+      "mint_amount": 1000000000000,
+      "faucet_amount": 1000000000000
+    }
+  ],
+  "markets": [
+    {
+      "supply_label": "aUSD",
+      "collateral_label": "aBTC",
+      "supply_mint": "55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45",
+      "collateral_mint": "1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9",
+      "index": 0,
+      "market": "9a5a237ddb156c367952ea3562ab3d05f3cdaf0e9bf6ba4fb7b76e233e181f53",
+      "created": true
+    }
+  ],
+  "transactions": [
+    {
+      "step": "create_market:aUSD/aBTC",
+      "txid": "5ad37f0351395055c33200a003fbdb43d0fb8d2e4e225df19fcede91d50e34c5"
+    }
+  ]
+}
