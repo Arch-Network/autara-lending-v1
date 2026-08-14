@@ -128,13 +128,31 @@ jobs:
 
       # Live socialization proof always uses the disposable stage market harness
       # (never touches shared aUSD/aBTC). Safe as a pre-mainnet gate.
+      # Its setup phase faucets keypairs and creates oracle feeds, so it hits the
+      # same testnet propagation lag the integration suite retries around — but
+      # as a plain `cargo run` it got no retry and failed the whole gate on one
+      # "Account not found". Each attempt builds its own disposable market, so
+      # retrying starts from clean state rather than resuming a half-done flow.
       - name: Shared loss live flow (stage/testnet)
         run: |
-          set -euo pipefail
+          set -uo pipefail
           OUT="$RUNNER_TEMP/shared_loss_flow.log"
-          cargo run -p autara-client --example shared_loss_flow 2>&1 | tee "$OUT"
-          grep -q 'FINAL VERDICT: PASS' "$OUT"
           echo "SHARED_LOSS_LOG=$OUT" >> "$GITHUB_ENV"
+          for attempt in 1 2 3; do
+            echo "== shared_loss_flow attempt $attempt/3 =="
+            cargo run -p autara-client --example shared_loss_flow 2>&1 | tee "$OUT"
+            if grep -q 'FINAL VERDICT: PASS' "$OUT"; then
+              echo "shared_loss_flow passed on attempt $attempt"
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              delay=$((attempt * 15))
+              echo "attempt $attempt did not reach PASS; retrying in ${delay}s"
+              sleep "$delay"
+            fi
+          done
+          echo "::error::shared_loss_flow never reached 'FINAL VERDICT: PASS' in 3 attempts." >&2
+          exit 1
 
       - name: Decode e2e keys (testnet mint authorities)
         if: ${{ inputs.mode == 'testnet' }}

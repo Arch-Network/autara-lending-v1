@@ -92,10 +92,26 @@ else
 fi
 pass "integration tests (incl. socialize_loss, capital_sweep)"
 
+# Its setup phase faucets keypairs and creates oracle feeds, so it hits the same
+# testnet propagation lag the integration suite retries around. Each attempt
+# builds its own disposable market, so retrying starts from clean state.
 echo "== 2) Shared loss live flow (stage disposable market) =="
 SL_LOG="$LOG_DIR/shared_loss_flow-$TS.log"
-cargo run -p autara-client --example shared_loss_flow 2>&1 | tee "$SL_LOG"
-grep -q 'FINAL VERDICT: PASS' "$SL_LOG" || fail "shared_loss_flow FINAL VERDICT: PASS"
+sl_ok=0
+for attempt in 1 2 3; do
+  echo "-- shared_loss_flow attempt $attempt/3 --"
+  cargo run -p autara-client --example shared_loss_flow 2>&1 | tee "$SL_LOG" || true
+  if grep -q 'FINAL VERDICT: PASS' "$SL_LOG"; then
+    sl_ok=1
+    break
+  fi
+  if [[ "$attempt" -lt 3 ]]; then
+    delay=$((attempt * 15))
+    echo "attempt $attempt did not reach PASS; retrying in ${delay}s" >&2
+    sleep "$delay"
+  fi
+done
+[[ "$sl_ok" == "1" ]] || fail "shared_loss_flow FINAL VERDICT: PASS (3 attempts)"
 pass "shared_loss_flow"
 
 echo "== 3) Configure e2e ($MODE) =="
