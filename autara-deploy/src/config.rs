@@ -425,9 +425,15 @@ impl DeployConfig {
             network,
             arch_rpc_url,
 
-            program_key_path: env_or("PROGRAM_KEY_PATH", "autara-deploy/.keys-testnet/program.json"),
+            program_key_path: env_or(
+                "PROGRAM_KEY_PATH",
+                "autara-deploy/.keys-testnet/program.json",
+            ),
             oracle_key_path: env_or("ORACLE_KEY_PATH", "autara-deploy/.keys-testnet/oracle.json"),
-            deployer_key_path: env_or("DEPLOYER_KEY_PATH", "autara-deploy/.keys-testnet/deployer.json"),
+            deployer_key_path: env_or(
+                "DEPLOYER_KEY_PATH",
+                "autara-deploy/.keys-testnet/deployer.json",
+            ),
             admin_key_path: env_or("ADMIN_KEY_PATH", "autara-deploy/.keys-testnet/admin.json"),
 
             program_elf_path: env_or("PROGRAM_ELF_PATH", "target/deploy/autara_program.so"),
