@@ -91,8 +91,11 @@ pub enum LendingAccountValidationError {
     InvalidMintForTokenAccount,
     #[error("Invalid protocol authority")]
     InvalidProtocolAuthority,
+    #[error("Invalid liquidator whitelist entry")]
     InvalidLiquidatorWhitelistEntry,
+    #[error("Missing liquidator whitelist entry")]
     MissingLiquidatorWhitelistEntry,
+    #[error("Liquidator is not whitelisted")]
     LiquidatorNotWhitelisted,
 }
 
