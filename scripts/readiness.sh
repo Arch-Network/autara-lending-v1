@@ -109,11 +109,14 @@ trap cleanup EXIT
 if [[ "$MODE" == "testnet" ]]; then
   export E2E_RPC="${E2E_RPC:-https://rpc.testnet.arch.network}"
   export E2E_NETWORK="${E2E_NETWORK:-testnet4}"
-  export E2E_PROGRAM_ID="${E2E_PROGRAM_ID:-34cf72a92dd76322a42f13f99e51cf7c03221f4adbd4ee7e0c409c4161dfe20c}"
-  export E2E_MARKET="${E2E_MARKET:-d8d679b946aafb22322f477cd5f196700f181aa3f712ca09e486fc77cedc0cce}"
-  export E2E_AUSD_MINT="${E2E_AUSD_MINT:-8ec480c6e5458e7d37dc2a9f7d7d149a02d8182a38523b037905203ff36b71f6}"
-  export E2E_ABTC_MINT="${E2E_ABTC_MINT:-627ecd24366c89314b12aa08a1b2fffc3890cb9cf64fb04fe3e95c7182b23dfb}"
-  export ORACLE_PROGRAM_ID="${ORACLE_PROGRAM_ID:-8d24068aa026fd2e6ccca6e7b64a944b0e384df279b15f599ddd4a5285d592e8}"
+  # aUSD/aBTC market on the live stage deployment; the previous defaults pointed
+  # at a testnet deployment that no longer exists.
+  # Source of truth: deployments/testnet-ausd-abtc.json (PR #38).
+  export E2E_PROGRAM_ID="${E2E_PROGRAM_ID:-53def2dc8516302842b10e356914d2a5f6b33425ba42aec684f706aa1cf64192}"
+  export E2E_MARKET="${E2E_MARKET:-9a5a237ddb156c367952ea3562ab3d05f3cdaf0e9bf6ba4fb7b76e233e181f53}"
+  export E2E_AUSD_MINT="${E2E_AUSD_MINT:-55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45}"
+  export E2E_ABTC_MINT="${E2E_ABTC_MINT:-1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9}"
+  export ORACLE_PROGRAM_ID="${ORACLE_PROGRAM_ID:-eee682c27db375bebbc17ed9a76aaa935c8b72bc7de50d736f03e2dfbed84b15}"
   export ORACLE_FEEDS="${ORACLE_FEEDS:-0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a}"
   if [[ -z "${E2E_USER_KEY:-}" ]]; then
     mkdir -p /tmp/autara-e2e
@@ -121,6 +124,8 @@ if [[ "$MODE" == "testnet" ]]; then
     export E2E_USER_KEY=/tmp/autara-e2e/user.key
   fi
   unset E2E_SKIP_MINT || true
+
+  ./scripts/check-e2e-targets.sh || fail "e2e targets exist on-chain"
 
   echo "== 3a) Start local Pyth pusher =="
   cargo build --release -p autara-pyth
@@ -159,6 +164,7 @@ else
     fi
   done
   pass "mainnet-safe env present (E2E_SKIP_MINT=1)"
+  ./scripts/check-e2e-targets.sh || fail "e2e targets exist on-chain"
 fi
 
 echo "== 4) e2e lending flow =="
