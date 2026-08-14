@@ -22,6 +22,46 @@ create markets, or faucet-fund accounts as part of this hygiene step.
 | `autara-deploy/.keys-mainnet/` / `.keys-*/` | **No** | Same pattern for other networks. |
 | `tokens.json` | Yes | Public mint/authority **pubkeys** + key **paths** only — never secret bytes. |
 
+## Restore stage keys (integration tests / shared_loss_flow)
+
+`autara-client` resolves the stage program, oracle and admin from
+`keys/autara-stage.key`, `keys/autara-pyth-stage.key` and
+`keys/autara-admin-stage.key`. Those paths are gitignored now, so a fresh clone
+cannot build an `AutaraFixture` — every integration test panics identically with
+`NotFound` at `autara-client/src/config.rs`.
+
+Untracking did not purge them, so local copies are recoverable from history:
+
+```bash
+# Trailing ^ matters: rev-list lands on the commit that DELETED the keys, so we
+# want its parent (bb6f488, the last commit where they were still tracked).
+REF=$(git rev-list -1 HEAD -- keys/autara-stage.key)^
+mkdir -p keys
+for k in autara-stage autara-pyth-stage autara-admin-stage; do
+  git show "$REF:keys/$k.key" > "keys/$k.key" && chmod 600 "keys/$k.key"
+done
+```
+
+Expected pubkeys (public, safe to share) — use these to confirm a restore:
+
+| Key | Pubkey |
+|---|---|
+| `autara-stage` | `53def2dc8516302842b10e356914d2a5f6b33425ba42aec684f706aa1cf64192` |
+| `autara-pyth-stage` | `eee682c27db375bebbc17ed9a76aaa935c8b72bc7de50d736f03e2dfbed84b15` |
+| `autara-admin-stage` | `9fe2d81600314dc3db735bd6924b655b6a515a4de6f084cbbd23139e9da924ec` |
+
+```bash
+cargo run -q -p autara-client --example print_pubkey -- --key keys/autara-stage.key
+```
+
+CI gets the same three via repo secrets `AUTARA_STAGE_PROGRAM_KEY_B64`,
+`AUTARA_STAGE_ORACLE_KEY_B64` and `AUTARA_STAGE_ADMIN_KEY_B64`, which
+`autara-readiness` decodes back into `keys/`. These are **distinct** from the
+`.keys-testnet` deploy roles (`PROGRAM_KEYPAIR_B64` & co) on the `testnet`
+Environment. Once the deferred rotation/redeploy lands this section goes away:
+the stage keys are compromised and only still in use because the existing stage
+deployment is bound to them.
+
 ## Generate / regenerate testnet keys
 
 Four deploy roles (program / oracle / deployer / admin):

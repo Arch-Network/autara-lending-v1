@@ -69,6 +69,43 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
+      # keys/ is gitignored since #44, but autara-client still resolves the stage
+      # program, oracle and admin from those paths, so the integration suite and
+      # shared_loss_flow cannot construct a fixture without them. These are the
+      # legacy stage keys for the existing testnet deployment; they are not the
+      # .keys-testnet deploy roles (PROGRAM_KEYPAIR_B64 & co).
+      - name: Restore stage keypairs
+        env:
+          STAGE_PROGRAM_B64: ${{ secrets.AUTARA_STAGE_PROGRAM_KEY_B64 }}
+          STAGE_ORACLE_B64: ${{ secrets.AUTARA_STAGE_ORACLE_KEY_B64 }}
+          STAGE_ADMIN_B64: ${{ secrets.AUTARA_STAGE_ADMIN_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p keys
+          restore() {
+            local b64="$1" dest="$2" name="$3"
+            if [ -z "$b64" ]; then
+              echo "::error::Missing secret $name. The integration suite needs the stage keypairs; see docs/key-hygiene.md." >&2
+              exit 1
+            fi
+            printf '%s' "$b64" | base64 -d > "$dest"
+            chmod 600 "$dest"
+            # Stage keys are 32-byte secrets stored as 64 hex chars, no trailing
+            # newline. A wrong-sized file means the secret was pasted or encoded
+            # incorrectly, which would otherwise fail deep inside a test.
+            local size
+            size=$(wc -c < "$dest" | tr -d ' ')
+            if [ "$size" -ne 64 ]; then
+              echo "::error::$name decoded to $size bytes, expected 64. Re-encode with: base64 -i keys/<file>" >&2
+              exit 1
+            fi
+          }
+          restore "${STAGE_PROGRAM_B64:-}" keys/autara-stage.key AUTARA_STAGE_PROGRAM_KEY_B64
+          restore "${STAGE_ORACLE_B64:-}" keys/autara-pyth-stage.key AUTARA_STAGE_ORACLE_KEY_B64
+          restore "${STAGE_ADMIN_B64:-}" keys/autara-admin-stage.key AUTARA_STAGE_ADMIN_KEY_B64
+          echo "Restored 3 stage keypairs into keys/"
+
       - name: Unit tests (offline)
         run: |
           set -euo pipefail

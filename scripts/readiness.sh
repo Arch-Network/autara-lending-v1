@@ -41,6 +41,28 @@ SUMMARY="$LOG_DIR/summary-$MODE-$TS.md"
 pass() { echo "PASS  $*"; echo "- [x] $*" >>"$SUMMARY"; }
 fail() { echo "FAIL  $*" >&2; echo "- [ ] $* (FAILED)" >>"$SUMMARY"; exit 1; }
 
+# keys/ is gitignored since #44, but autara-client still resolves the stage
+# program, oracle and admin from those paths. Without them every integration
+# test panics identically inside the fixture, which is a confusing way to learn
+# your working copy is missing key material.
+MISSING_KEYS=()
+for k in autara-stage autara-pyth-stage autara-admin-stage; do
+  [[ -s "keys/$k.key" ]] || MISSING_KEYS+=("keys/$k.key")
+done
+if ((${#MISSING_KEYS[@]})); then
+  echo "Missing stage key material required by the integration suite:" >&2
+  printf '  %s\n' "${MISSING_KEYS[@]}" >&2
+  echo >&2
+  echo "Restore your local copies, or recover them from git history (they were" >&2
+  echo "untracked, not purged). See 'Restore stage keys' in docs/key-hygiene.md:" >&2
+  echo >&2
+  echo "  REF=\$(git rev-list -1 HEAD -- keys/autara-stage.key)^   # ^ = before deletion" >&2
+  echo "  mkdir -p keys && for k in autara-stage autara-pyth-stage autara-admin-stage; do" >&2
+  echo "    git show \"\$REF:keys/\$k.key\" > \"keys/\$k.key\" && chmod 600 \"keys/\$k.key\"" >&2
+  echo "  done" >&2
+  exit 2
+fi
+
 {
   echo "# Autara readiness — \`$MODE\`"
   echo
