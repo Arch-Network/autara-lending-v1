@@ -9,6 +9,11 @@ user.key
 .DS_Store
 .env
 
+# Key material: never track keypairs. Working copies live on disk only.
+# (tokens.json stays tracked — it holds public mint/authority pubkeys + paths.)
+keys/
+*.key
+
 # Deploy tooling: gitignored key directories (autara-deploy). NEVER commit keys.
 .keys-testnet/
 .keys-mainnet/
