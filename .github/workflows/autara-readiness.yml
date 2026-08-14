@@ -66,13 +66,29 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Unit + integration tests
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Unit tests (offline)
         run: |
           set -euo pipefail
           cargo test -p autara-lib --lib
           cargo test -p autara-program --lib
-          cargo test -p autara-integration-tests -- --nocapture
-          cargo test -p autara-integration-tests socialize_loss -- --nocapture
+
+      # The integration suite runs against LIVE Arch testnet: every test faucets
+      # accounts and creates a fresh market + oracle feeds, so individual cases
+      # intermittently see "Account not found" / "market not found" while state
+      # propagates on the RPC node. Retries absorb that; a real regression still
+      # fails every attempt. Mirrors `make program-test` (nextest, no-fail-fast).
+      - name: Integration tests (live testnet)
+        env:
+          NEXTEST_RETRIES: ${{ vars.READINESS_NEXTEST_RETRIES || '3' }}
+        run: |
+          set -euo pipefail
+          cargo nextest run \
+            --no-fail-fast \
+            --retries "$NEXTEST_RETRIES" \
+            -p autara-integration-tests
 
       # Live socialization proof always uses the disposable stage market harness
       # (never touches shared aUSD/aBTC). Safe as a pre-mainnet gate.

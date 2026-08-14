@@ -50,12 +50,24 @@ fail() { echo "FAIL  $*" >&2; echo "- [ ] $* (FAILED)" >>"$SUMMARY"; exit 1; }
   echo "## Results"
 } >"$SUMMARY"
 
-echo "== 1) Unit + integration tests =="
+echo "== 1a) Unit tests (offline) =="
 cargo test -p autara-lib --lib
 cargo test -p autara-program --lib
-cargo test -p autara-integration-tests -- --nocapture
-cargo test -p autara-integration-tests socialize_loss -- --nocapture
-pass "unit + integration (+ socialize_loss) tests"
+pass "unit tests (autara-lib, autara-program)"
+
+# The integration suite runs against LIVE Arch testnet, so cases intermittently
+# fail while faucet-funded accounts / fresh markets propagate on the RPC node.
+# Retry them like `make program-test` does.
+echo "== 1b) Integration tests (live testnet) =="
+NEXTEST_RETRIES="${NEXTEST_RETRIES:-3}"
+if command -v cargo-nextest >/dev/null 2>&1; then
+  cargo nextest run --no-fail-fast --retries "$NEXTEST_RETRIES" -p autara-integration-tests
+else
+  echo "cargo-nextest not found (install: curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C \"\${CARGO_HOME:-\$HOME/.cargo}/bin\")"
+  echo "Falling back to cargo test WITHOUT retries; live-testnet flakes are likely."
+  cargo test -p autara-integration-tests -- --nocapture
+fi
+pass "integration tests (incl. socialize_loss, capital_sweep)"
 
 echo "== 2) Shared loss live flow (stage disposable market) =="
 SL_LOG="$LOG_DIR/shared_loss_flow-$TS.log"
