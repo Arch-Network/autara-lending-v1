@@ -12,9 +12,9 @@
 //!
 //! Run from repo root:  cargo run -p autara-client --bin dry_run_upgrade
 //!
-//! Note: writes the full ~616 KB ELF twice (deploy + upgrade), so it sends a lot
-//! of transactions and takes a while. The throwaway program is abandoned on
-//! testnet afterward; its id is printed.
+//! Note: it writes an ELF twice (the small one, then the full ~772 KB program),
+//! so it sends several hundred transactions and takes a few minutes. The
+//! throwaway program is abandoned on testnet afterward; its id is printed.
 
 use std::fs;
 
@@ -24,7 +24,7 @@ use autara_deploy::elf_upload::deploy_program_elf;
 
 // Fresh-deploy a SMALL program, then upgrade to the big one, so the upgrade
 // GROWS the account and exercises the [2/4] resize path the live run will hit
-// (live: 616 KB -> 722 KB).
+// (measured: 125 KB -> 772 KB here; live: 646 KB -> 772 KB).
 const FRESH_ELF: &str = "target/deploy/autara_oracle.so";
 const UPGRADE_ELF: &str = "target/deploy/autara_program.so";
 

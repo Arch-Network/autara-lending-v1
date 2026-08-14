@@ -66,8 +66,22 @@ fn main() -> anyhow::Result<()> {
     let (base, _bump) = Pubkey::find_program_address(&[], &program_id);
     let idl_account = Pubkey::create_with_seed(&base, IDL_SEED, &program_id).map_err(de)?;
 
+    // Stamp `address` from the compiled-in id rather than trusting the file: the
+    // committed IDL carries the testnet program, so publishing from a mainnet
+    // build would otherwise upload an IDL that names the wrong program.
+    let raw = {
+        let mut idl: serde_json::Value =
+            serde_json::from_slice(&fs::read(path_from_workspace(IDL_PATH))?)?;
+        let declared = idl.get("address").and_then(|a| a.as_str()).unwrap_or("");
+        let actual = hex::encode(program_id.0);
+        if declared != actual {
+            println!("  rewriting IDL address {declared} -> {actual}");
+        }
+        idl["address"] = serde_json::Value::String(actual);
+        serde_json::to_vec_pretty(&idl)?
+    };
+
     // Compress the IDL JSON (zlib / RFC1950, matching the indexer's ZlibDecoder).
-    let raw = fs::read(path_from_workspace(IDL_PATH))?;
     let compressed = {
         let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
         enc.write_all(&raw)?;
@@ -105,15 +119,34 @@ fn main() -> anyhow::Result<()> {
             let net = config.network;
 
             // 1. Create (skip if the account already exists from a previous run).
-            if client.read_account_info(idl_account).await.is_err() {
-                println!("  [create] allocating IDL account");
-                send(&client, net, &authority_keypair, authority_pubkey, create_ix).await?;
-            } else {
-                println!("  [create] IDL account already exists, skipping create");
-            }
+            //    `already_written` is what makes a retry safe: Write APPENDS at
+            //    the account's current data_len, so blindly re-sending every
+            //    chunk after a partial run would duplicate the payload — pushing
+            //    it past the allocation and leaving a corrupt blob whose
+            //    data_len no longer matches. Resume from what is on chain.
+            let already_written = match client.read_account_info(idl_account).await {
+                Err(_) => {
+                    println!("  [create] allocating IDL account");
+                    send(&client, net, &authority_keypair, authority_pubkey, create_ix).await?;
+                    0
+                }
+                Ok(acc) => {
+                    anyhow::ensure!(acc.data.len() >= 44, "idl account too small");
+                    let written =
+                        u32::from_le_bytes(acc.data[40..44].try_into().unwrap()) as usize;
+                    anyhow::ensure!(
+                        written <= compressed.len()
+                            && compressed[..written] == acc.data[44..44 + written],
+                        "on-chain IDL prefix ({written} B) does not match this file; \
+                         close the account and re-publish"
+                    );
+                    println!("  [create] account exists with {written}/{} B written, resuming", compressed.len());
+                    written
+                }
+            };
 
-            // 2. Write chunks sequentially (each appends at the current data_len).
-            for (i, chunk) in compressed.chunks(WRITE_CHUNK).enumerate() {
+            // 2. Write the remaining chunks sequentially (each appends at data_len).
+            for (i, chunk) in compressed[already_written..].chunks(WRITE_CHUNK).enumerate() {
                 let mut data = IDL_IX_TAG_LE.to_vec();
                 data.push(IX_WRITE);
                 data.extend_from_slice(&(chunk.len() as u32).to_le_bytes()); // borsh Vec<u8> len
@@ -166,7 +199,8 @@ async fn send(
         .await
         .map_err(de)?;
     if let Status::Failed(reason) = processed.status {
-        anyhow::bail!("tx {txid} failed: {reason}");
+        // base58: Hash's Display is hex, which the explorer does not accept.
+        anyhow::bail!("tx {} failed: {reason}  {}", tx_b58(&txid), explorer_tx(&txid));
     }
     println!("        tx {}  {}", tx_b58(&txid), explorer_tx(&txid));
     Ok(())

@@ -79,7 +79,13 @@ fn missing_chunks(account_data: &[u8], elf: &[u8], chunk_size: usize) -> Vec<usi
 async fn confirm(client: &AsyncArchRpcClient, txid: &Hash) -> anyhow::Result<()> {
     let tx = client.wait_for_processed_transaction(txid).await.map_err(de)?;
     if let Status::Failed(reason) = tx.status {
-        anyhow::bail!("tx {txid} failed: {reason}");
+        // base58 + URL: this fires mid-upgrade with the program non-executable,
+        // so the id here has to be one the explorer actually resolves.
+        anyhow::bail!(
+            "tx {} failed: {reason}  {}",
+            tx_b58(txid),
+            explorer_tx(txid)
+        );
     }
     Ok(())
 }
