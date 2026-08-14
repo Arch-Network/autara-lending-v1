@@ -1,11 +1,16 @@
-# Autara — upgrade the deployed program in place. Reuses the EXISTING program
-# keypair, so the program id / autara_program::id() are UNCHANGED; builds the
-# new ELF after the (no-op) program-id sync and re-uploads it via the SDK
-# ProgramDeployer, signed by the deployer (upgrade authority).
+# Autara — upgrade the deployed program AND oracle in place.
+#
+# Reuses the EXISTING program + oracle keypairs, so both program ids are
+# UNCHANGED; builds both ELFs after the (no-op) program-id sync and re-uploads
+# them via the SDK ProgramDeployer, signed by the deployer (upgrade authority).
 #
 # Upgrade authority custody: the on-chain loader upgrade is signed by the
 # DEPLOYER_KEYPAIR_B64 secret on the network Environment — it MUST be the same
-# deployer/authority used for the original deploy. The oracle is NOT touched.
+# deployer/authority used for the original deploy.
+#
+# Prefer the chained `autara-release` workflow for pre-mainnet readiness →
+# upgrade dry-run → gated real upgrade. This wrapper remains for standalone
+# upgrades.
 #
 # Thin dispatch wrapper around .github/workflows/_autara-action.yml (action=upgrade).
 
