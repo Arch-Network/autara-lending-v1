@@ -21,3 +21,6 @@ keys/
 
 # Local planning artifacts must never be committed.
 /docs/superpowers/
+
+# Rollback ELFs dumped by backup_program_elf — large binaries, never committed.
+/backups/

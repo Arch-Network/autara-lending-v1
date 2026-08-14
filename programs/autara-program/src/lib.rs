@@ -62,6 +62,16 @@ pub fn autara_process_instruction<'a>(
     accounts: &'a [AccountInfo<'a>],
     instruction_data: &[u8],
 ) -> LendingProgramResult {
+    // On-chain IDL account instructions. Routed before the AurataInstruction
+    // decode via the 8-byte `anchor:idl` selector, which can never collide with
+    // the 1-byte AurataInstruction tags (0..=21). See processor::idl.
+    if crate::processor::idl::is_idl_instruction(instruction_data) {
+        return crate::processor::idl::process_idl_instruction(
+            program_id,
+            accounts,
+            &instruction_data[crate::processor::idl::IDL_IX_TAG_LE.len()..],
+        );
+    }
     let mut accounts_iter = &mut accounts.iter();
     let clock = utils::clock();
     let ix = <Box<AurataInstruction>>::deserialize(&mut &instruction_data[..])

@@ -2,6 +2,7 @@ pub mod api;
 pub mod client;
 pub mod config;
 pub mod filter;
+pub mod idl_deploy;
 pub mod prometheus;
 pub mod rpc_ext;
 pub mod test;
