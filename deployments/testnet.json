@@ -1,0 +1,62 @@
+{
+  "network": "testnet",
+  "arch_rpc_url": "https://rpc.testnet.arch.network",
+  "deployed_at_unix": 1786796009,
+  "program_id": "2aa41c8f71f0ede3f374c15ea1ca6096c3f1c15a10da6530c0ecfa48ba109513",
+  "oracle_id": "180ec4dd6eb8d7f2435d4d89c5d166c8e6a3fed3c33f58de25be8e64e94a99dd",
+  "build_commit": "5c2a0d3",
+  "program_elf_path": "target/deploy/autara_program.so",
+  "program_elf_sha256": "b5f978ff8b55aedfcf3a668bef8261998a81c399154ad7f482230c8c046605bb",
+  "oracle_elf_path": "target/deploy/autara_oracle.so",
+  "oracle_elf_sha256": "24f5d71a569c857b509121d88f14ee58a24fee13e449bafefd5bfe7d35a437e2",
+  "deployer": "e63aa66604bf22a88816db487403c19fb03a4d016d48919ce2ad29b71cd26e1c",
+  "admin": "e0be0c3520ca9a06cfccf1f80b5819568e1a4acc0cc3248d405eb4bf0cf03db0",
+  "fee_receiver": "e0be0c3520ca9a06cfccf1f80b5819568e1a4acc0cc3248d405eb4bf0cf03db0",
+  "protocol_fee_share_bps": 5000,
+  "global_config": "c17fc27733ed4aaf0faed136032122bb58af5b965e36466dd6d9804b5ade6d1e",
+  "tokens": [
+    {
+      "label": "aUSD",
+      "mint": "55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45",
+      "mint_base58": "6mqUuwPYehXei6mGBY4bQ6XK1z7e6rrFAZRzYKdH8qkp",
+      "decimals": 6,
+      "mint_amount": 1000000000000,
+      "faucet_amount": 1000000000000
+    },
+    {
+      "label": "aBTC",
+      "mint": "1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9",
+      "mint_base58": "2yHWVNYyjnsxZqpnvTbPzWiHwpNQ2zBQU6BC4Lnbu7sW",
+      "decimals": 8,
+      "mint_amount": 1000000000000,
+      "faucet_amount": 1000000000000
+    }
+  ],
+  "markets": [
+    {
+      "supply_label": "aUSD",
+      "collateral_label": "aBTC",
+      "supply_mint": "55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45",
+      "collateral_mint": "1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9",
+      "index": 0,
+      "market": "e66015deca68f6357b4ebfd7195a7808617082ad310b9c2b7f3db3ab3ca1a5b9",
+      "market_base58": "GWHkSPg6ZHR368FYw9w363oCGByu86cSBnBB2tFk3w1a",
+      "created": true
+    }
+  ],
+  "transactions": [
+    {
+      "step": "create_global_config",
+      "txid": "9cc4182ca9cf373e0278d422240c9c4817aed330439e9c521a247565341c2ef5"
+    },
+    {
+      "step": "create_market:aUSD/aBTC",
+      "txid": "209b6380e094c617627313472162a0c89079215665cddf0c05ed4ce733f9d791"
+    }
+  ],
+  "notes": [
+    "Product market is aUSD/aBTC with Arch Network APL mints (2026-08-15).",
+    "Prior USDC/BTC (3f0a4e07…) and USDC/ETH (fc8cb543…) markets created on 2026-08-14 used incorrect faucet mints for product and are not the default path.",
+    "Program/oracle were NOT redeployed for this market fix; only STEP_TOKEN_SETUP + STEP_CREATE_MARKET ran against the existing 2026-08-14 programs."
+  ]
+}
