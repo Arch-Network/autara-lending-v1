@@ -189,23 +189,31 @@ async fn refresh_signer_balance(
     bitcoin_network: Network,
     metrics: Option<&PusherMetrics>,
 ) -> Option<u64> {
-    // Balance reads go through the explorer API wherever it indexes the
-    // network: a single RPC node can serve stale account state, which flapped
-    // the balance alerts between critical and recovered.
-    let read = match explorer {
-        Some(explorer) => explorer.signer_balance(signer_pubkey).await,
-        None => client
-            .read_account_info(*signer_pubkey)
-            .await
-            .map(|info| info.lamports)
-            .map_err(|e| anyhow::anyhow!("{e}")),
-    };
-    let lamports = match read {
-        Ok(lamports) => lamports,
-        Err(err) => {
-            tracing::warn!("Failed to read pusher signer balance: {err}");
-            return None;
-        }
+    // Prefer the explorer API when it indexes the network (avoids flapping
+    // alerts from a stale RPC node). If explorer has no indexed balance —
+    // including never-funded / zero-lamport signers — fall back to RPC so
+    // testnet auto-refill can still run. Without that fallback, an unfunded
+    // Railway pusher loops forever on "fee payer … present".
+    let lamports = match explorer {
+        Some(explorer) => match explorer.signer_balance(signer_pubkey).await {
+            Ok(lamports) => lamports,
+            Err(explorer_err) => {
+                tracing::warn!(
+                    "Explorer balance unavailable ({explorer_err}); falling back to RPC"
+                );
+                match client.read_account_info(*signer_pubkey).await {
+                    Ok(info) => info.lamports,
+                    Err(_) => 0,
+                }
+            }
+        },
+        None => match client.read_account_info(*signer_pubkey).await {
+            Ok(info) => info.lamports,
+            Err(err) => {
+                tracing::warn!("Failed to read pusher signer balance: {err}");
+                0
+            }
+        },
     };
     if let Some(metrics) = metrics {
         metrics.set_signer_balance(lamports);
