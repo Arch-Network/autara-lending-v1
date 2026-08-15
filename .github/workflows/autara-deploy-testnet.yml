@@ -1,0 +1,70 @@
+# Autara — chained first-time deploy for a network.
+#
+# Runs deploy → initialize → setup-markets in order via the shared
+# `_autara-action.yml` engine. Existing split wrappers
+# (`autara-deploy` / `autara-initialize` / `autara-setup-markets`) remain
+# available for partial re-runs.
+#
+# Default dry_run=true: prints addresses + preflight only. Set dry_run=false
+# only after a dry-run looks correct (mainnet still needs mainnet_confirm).
+
+name: autara-deploy-testnet
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target network'
+        type: choice
+        required: true
+        options:
+          - testnet
+          - mainnet
+        default: testnet
+      dry_run:
+        description: 'Dry run (print addresses + preflight, send NO transactions). Leave true for the first run.'
+        type: boolean
+        default: true
+      mainnet_confirm:
+        description: "Type EXACTLY 'DEPLOY MAINNET' to authorize a REAL (dry_run=false) mainnet chain."
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autara-action-${{ github.event.inputs.network }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_autara-action.yml
+    secrets: inherit
+    with:
+      action: deploy
+      network: ${{ inputs.network }}
+      dry_run: ${{ inputs.dry_run }}
+      mainnet_confirm: ${{ inputs.mainnet_confirm }}
+
+  initialize:
+    needs: deploy
+    uses: ./.github/workflows/_autara-action.yml
+    secrets: inherit
+    with:
+      action: initialize
+      network: ${{ inputs.network }}
+      dry_run: ${{ inputs.dry_run }}
+      mainnet_confirm: ${{ inputs.mainnet_confirm }}
+
+  setup_markets:
+    needs:
+      - deploy
+      - initialize
+    uses: ./.github/workflows/_autara-action.yml
+    secrets: inherit
+    with:
+      action: setup-markets
+      network: ${{ inputs.network }}
+      dry_run: ${{ inputs.dry_run }}
+      mainnet_confirm: ${{ inputs.mainnet_confirm }}

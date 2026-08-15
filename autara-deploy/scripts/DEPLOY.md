@@ -184,8 +184,12 @@ Follow these steps in order. Steps 1–6 are operational prerequisites that
    `dry_run=false` **and** `mainnet_confirm=DEPLOY MAINNET`, approving the
    Environment review when prompted. Order: `autara-deploy` (program + oracle) →
    `autara-initialize` (global config) → `autara-setup-markets` (token setup +
-   markets). Use `autara-upgrade` / `autara-release` for in-place **program +
-   oracle** upgrades (ids unchanged).
+   markets). Or run the chained **`autara-deploy-testnet`** workflow (same three
+   actions in order; `dry_run` defaults to true). Use `autara-upgrade` /
+   `autara-release` for in-place **program + oracle** upgrades (ids unchanged).
+   Publish / redeploy the oracle pusher with **`autara-deploy-pusher`** (GHCR
+   always; Railway when `RAILWAY_*` Environment secrets are set — see
+   `docs/oracle-pusher.md`).
 
 > **Upgrade-authority custody.** The deployer key is the program upgrade
 > authority (it signs the on-chain re-upload for `autara-upgrade`). Guard it like
