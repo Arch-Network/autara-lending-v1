@@ -44,10 +44,10 @@ jobs:
     environment: ${{ inputs.network }}
     env:
       NETWORK: ${{ inputs.network }}
-      IMAGE_NAME: ghcr.io/${{ github.repository }}/autara
     outputs:
       image_tag: ${{ steps.meta.outputs.tag }}
       image_latest: ${{ steps.meta.outputs.latest }}
+      image_name: ${{ steps.meta.outputs.image_name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -55,12 +55,17 @@ jobs:
         id: meta
         run: |
           set -euo pipefail
+          # GHCR requires the full repository path to be lowercase.
+          repo_lc="$(printf '%s' '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          image_name="ghcr.io/${repo_lc}/autara"
           sha_short="$(printf '%s' "${GITHUB_SHA}" | cut -c1-12)"
           tag="${NETWORK}-${sha_short}"
           latest="${NETWORK}-latest"
+          echo "image_name=${image_name}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_NAME=${image_name}" >> "$GITHUB_ENV"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "latest=${latest}" >> "$GITHUB_OUTPUT"
-          echo "Image tags: ${IMAGE_NAME}:${tag} and :${latest}"
+          echo "Image tags: ${image_name}:${tag} and :${latest}"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -100,7 +105,7 @@ jobs:
     environment: ${{ inputs.network }}
     env:
       NETWORK: ${{ inputs.network }}
-      IMAGE_NAME: ghcr.io/${{ github.repository }}/autara
+      IMAGE_NAME: ${{ needs.publish.outputs.image_name }}
       IMAGE_TAG: ${{ needs.publish.outputs.image_tag }}
       IMAGE_LATEST: ${{ needs.publish.outputs.image_latest }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
