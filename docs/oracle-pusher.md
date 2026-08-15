@@ -28,7 +28,7 @@ Point a service at this image and set env from the matching file:
 | `ROLE` | `pusher` | `pusher` |
 | `NETWORK` | `testnet` | `mainnet` |
 | `ARCH_RPC_URL` | `https://rpc.testnet.arch.network` | `https://rpc.mainnet.arch.network` |
-| `ORACLE_PROGRAM_ID` | `eee682c2…` (deployed stage oracle) | `a2b2fe9e…` (deploy artifact `oracle_id`) |
+| `ORACLE_PROGRAM_ID` | `180ec4dd…` (`deployments/testnet.json` → `oracle_id`) | `a2b2fe9e…` (deploy artifact `oracle_id`) |
 | `FEEDS` | BTC,USDC (add ETH if used) | BTC,USDC |
 | `SIGNER_KEY_B64` | optional (faucet funds a throwaway key) | **required** — pre-funded key, no faucet |
 | `SLACK_WEBHOOK_URL` | optional | recommended — `#arch-prime-alerts` incoming webhook |
@@ -96,6 +96,41 @@ After deploy: `curl -fsS http://<private-host>/health` and scrape `/metrics`.
 Alert rules live in `prometheus-alerts.yml` (`AutaraPusherNotPushing`,
 `AutaraPusherConsecutiveFailures`, `AutaraPusherOutOfFunds`).
 
+## CI: publish image + optional Railway redeploy
+
+From GitHub Actions → **autara-deploy-pusher** → Run workflow → choose
+`testnet` or `mainnet`.
+
+1. Builds the repo `Dockerfile` and pushes
+   `ghcr.io/Arch-Network/autara-lending-v1/autara:<network>-<sha>` and
+   `:<network>-latest` (uses `GITHUB_TOKEN` / `packages: write`).
+2. If the target GitHub Environment has `RAILWAY_TOKEN` + `RAILWAY_SERVICE_ID`
+   (optional `RAILWAY_ENVIRONMENT_ID`), syncs `ROLE` / `NETWORK` /
+   `ARCH_RPC_URL` / `ORACLE_PROGRAM_ID` / `FEEDS` (and `SIGNER_KEY_B64` when
+   that Environment secret is set) then triggers `railway redeploy`.
+3. If Railway secrets are missing, the image is still published and the job
+   summary lists the manual Railway next steps.
+
+### GitHub Environment secrets / vars (names only)
+
+| Name | Where | Purpose |
+|------|-------|---------|
+| `SIGNER_KEY_B64` | Environment secret | Stable pusher signer (synced to Railway when present) |
+| `ORACLE_PROGRAM_ID` | Environment variable | Oracle program hex id |
+| `ORACLE_FEEDS` | Environment variable | Comma-separated Pyth feed ids |
+| `RAILWAY_TOKEN` | Environment secret | Railway API token (**manual**) |
+| `RAILWAY_SERVICE_ID` | Environment secret | Pusher service id (**manual**) |
+| `RAILWAY_ENVIRONMENT_ID` | Environment secret | Optional Railway environment id/name (**manual**) |
+
+`SIGNER_KEY_B64` for testnet can be set from the local gitignored file:
+
+```bash
+gh secret set SIGNER_KEY_B64 --env testnet < autara-deploy/.keys-testnet/pusher.signer.b64
+```
+
+Railway token/service ids are not in this repo — set them on the GitHub
+Environment before expecting an automatic Railway redeploy.
+
 ## Sanity check
 
 A market recovers within one push cycle (~5s) once any write lands on its
@@ -105,10 +140,16 @@ the markets were created against, and that pushes reach `Status::Processed`
 
 ## Testnet repair: `InvalidPythOracleAccount` / `0x1b69`
 
-Live stage markets (`program 53def2dc…`, `oracle eee682c2…`) still have
-**120-byte** pre-authority feed PDAs. The lending program expects
-`PythPriceAccount` (**152 bytes**). Symptom: `SupplyApl` fails at
-`autara-lib/src/oracle/pyth.rs:48` with `LendingError(InvalidPythOracleAccount)`.
+**Current product testnet** uses oracle `180ec4dd…` (see
+`deployments/testnet.json`). Feeds for that oracle should be created at the
+new 152-byte layout.
+
+The **legacy compromised** stage markets (`program 53def2dc…`,
+`oracle eee682c2…`) still have **120-byte** pre-authority feed PDAs. The
+lending program expects `PythPriceAccount` (**152 bytes**). Symptom:
+`SupplyApl` fails at `autara-lib/src/oracle/pyth.rs:48` with
+`LendingError(InvalidPythOracleAccount)`. Do **not** point new e2e/pusher
+defaults at those ids.
 
 Confirm layout:
 
@@ -180,7 +221,7 @@ cargo run -p autara-pyth --example check_feed_age
    ```bash
    cargo run -p autara-pyth -- \
      --rpc https://rpc.testnet.arch.network --network testnet \
-     --program-id eee682c27db375bebbc17ed9a76aaa935c8b72bc7de50d736f03e2dfbed84b15 \
+     --program-id 180ec4dd6eb8d7f2435d4d89c5d166c8e6a3fed3c33f58de25be8e64e94a99dd \
      --signer autara-deploy/.keys-testnet/pusher.key \
      --push-interval-secs 5
    ```

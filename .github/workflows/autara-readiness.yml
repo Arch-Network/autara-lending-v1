@@ -224,14 +224,14 @@ jobs:
             {
               echo "E2E_RPC=${VAR_E2E_RPC:-https://rpc.testnet.arch.network}"
               echo "E2E_NETWORK=${VAR_E2E_NETWORK:-testnet4}"
-              # aUSD/aBTC market on the live stage deployment; the previous
-              # defaults pointed at a testnet deployment that no longer exists.
-              # Source of truth: deployments/testnet-ausd-abtc.json (PR #38).
-              echo "E2E_PROGRAM_ID=${VAR_E2E_PROGRAM_ID:-53def2dc8516302842b10e356914d2a5f6b33425ba42aec684f706aa1cf64192}"
-              echo "E2E_MARKET=${VAR_E2E_MARKET:-9a5a237ddb156c367952ea3562ab3d05f3cdaf0e9bf6ba4fb7b76e233e181f53}"
+              # aUSD/aBTC market on the rotated-key testnet deploy (2026-08-14/15).
+              # Source of truth: deployments/testnet.json (do not reuse
+              # compromised 53def2dc… / eee682c2… ids).
+              echo "E2E_PROGRAM_ID=${VAR_E2E_PROGRAM_ID:-2aa41c8f71f0ede3f374c15ea1ca6096c3f1c15a10da6530c0ecfa48ba109513}"
+              echo "E2E_MARKET=${VAR_E2E_MARKET:-e66015deca68f6357b4ebfd7195a7808617082ad310b9c2b7f3db3ab3ca1a5b9}"
               echo "E2E_AUSD_MINT=${VAR_E2E_AUSD_MINT:-55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45}"
               echo "E2E_ABTC_MINT=${VAR_E2E_ABTC_MINT:-1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9}"
-              echo "ORACLE_PROGRAM_ID=${VAR_ORACLE_PROGRAM_ID:-eee682c27db375bebbc17ed9a76aaa935c8b72bc7de50d736f03e2dfbed84b15}"
+              echo "ORACLE_PROGRAM_ID=${VAR_ORACLE_PROGRAM_ID:-180ec4dd6eb8d7f2435d4d89c5d166c8e6a3fed3c33f58de25be8e64e94a99dd}"
               echo "ORACLE_FEEDS=${VAR_ORACLE_FEEDS:-0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a}"
             } >> "$GITHUB_ENV"
           else
