@@ -81,8 +81,9 @@ The `autara-oracle` program is position-independent (it uses the runtime
 - `keys/` and `*.key` are gitignored; never commit keypairs.
 - Keep rotated/fresh testnet keys in `autara-deploy/.keys-testnet/` (also
   gitignored via `.keys-*/`).
-- `autara.testnet.env` points at `.keys-testnet/`. Testnet on-chain redeploy with
-  those keys completed 2026-08-14 (see `docs/testnet-deployment.md`).
+- `autara.testnet.env` points at `.keys-testnet/`. Testnet on-chain program
+  redeploy completed 2026-08-14; default `TOKENS`/`MARKET_PAIRS` are aUSD/aBTC
+  (Arch APL mints) as of 2026-08-15 (see `docs/testnet-deployment.md`).
 
 ## Per-network differences
 

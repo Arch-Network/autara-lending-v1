@@ -1,8 +1,9 @@
 # Autara Arch Testnet Deployment
 
 **Network:** Arch testnet (refreshed)  
-**Deployment date (UTC):** 2026-08-14  
-**Build commit:** `5c2a0d3` (main at deploy time; `autara_program::id()` synced to the new program key before ELF build)  
+**Program deploy date (UTC):** 2026-08-14  
+**aUSD/aBTC market fix (UTC):** 2026-08-15  
+**Build commit (program ELF):** `5c2a0d3` (main at program deploy; `autara_program::id()` synced to the new program key before ELF build)  
 **RPC endpoint:** `https://rpc.testnet.arch.network`
 
 ## Replaces compromised-key deployment
@@ -39,22 +40,33 @@ On-chain post-deploy check (`autara-deploy --dry-run`): `program_on_chain: execu
 | liquidation_bonus | 0.05 |
 | max_utilisation | 0.9 |
 
-## Token mints
+## Token mints (product)
 
-Existing APL mints (public addresses; reused — independent of lending program id):
+Arch Network APL mints (public addresses; reused — independent of lending program id). Decimals verified on-chain 2026-08-15:
 
-| Label | Mint | Decimals |
-| --- | --- | --- |
-| BTC | `36a97410055bbbdc52b421d0c95f76d85eca066b83db8b14f64665b178c93d8b` | 8 |
-| ETH | `7250792453cc3a0bd015778f240dd50b552c48c153b7b83e3ef0c441aff9483c` | 8 |
-| USDC | `a80fa79ee82952b0a127f50e7d469dae1a51315d4267ca38d7907ad5df5cb3cb` | 6 |
+| Label | Mint (base58) | Mint (hex) | Decimals |
+| --- | --- | --- | --- |
+| aUSD | `6mqUuwPYehXei6mGBY4bQ6XK1z7e6rrFAZRzYKdH8qkp` | `55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45` | 6 |
+| aBTC | `2yHWVNYyjnsxZqpnvTbPzWiHwpNQ2zBQU6BC4Lnbu7sW` | `1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9` | 8 |
+
+Default env: `autara-deploy/scripts/autara.testnet.env` (`MARKET_PAIRS=aUSD/aBTC`). Same mints in `autara.testnet.ausd-abtc.env`.
 
 ## Markets
 
-| Pair (supply/collateral) | Market | Created this run |
+| Pair (supply/collateral) | Market (hex) | Created |
 | --- | --- | --- |
-| USDC/BTC | `3f0a4e07765588ff00c02328a94fc82afdb29029ab7d5c03ebfdb2e6fb188e74` | yes |
-| USDC/ETH | `fc8cb543f63fb355b723bcaeb9f3498c3f9cbd3bad3ef763f174ac2b02423183` | yes |
+| aUSD/aBTC | `e66015deca68f6357b4ebfd7195a7808617082ad310b9c2b7f3db3ab3ca1a5b9` | 2026-08-15 (create-market only; program not redeployed) |
+
+On-chain: market owned by Autara program; supply mint = aUSD, collateral mint = aBTC (`autara-deploy verify` mints/market checks pass). Oracle feed accounts for BTC/USDC still need the pusher before borrow/lend e2e.
+
+### Incorrect markets from 2026-08-14 (do not use as product default)
+
+The initial redeploy accidentally created faucet-mint markets. They remain on-chain but are **not** the Autara product path:
+
+| Pair | Market (hex) |
+| --- | --- |
+| USDC/BTC | `3f0a4e07765588ff00c02328a94fc82afdb29029ab7d5c03ebfdb2e6fb188e74` |
+| USDC/ETH | `fc8cb543f63fb355b723bcaeb9f3498c3f9cbd3bad3ef763f174ac2b02423183` |
 
 ## Notable transactions
 
@@ -63,8 +75,7 @@ Existing APL mints (public addresses; reused — independent of lending program 
 | create program account (autara_program) | `fe5c1d7c7189a751f2e51e6e148d75c3196fe29f493668da27cbc999d3536550` |
 | create program account (autara_oracle) | `43dc0fff536a77ea71d2c7b41a868ff21f181f83622ccdf29aaa9f5d15fe7364` |
 | create_global_config | `9cc4182ca9cf373e0278d422240c9c4817aed330439e9c521a247565341c2ef5` |
-| create_market:USDC/BTC | `1656eb4289ccf32fda5ef2e0ea0ccef6d0d522fbae2c60216ad359905364aba5` |
-| create_market:USDC/ETH | `d5f03e3b32401d39ed774eb9cc5be0482d29d619e7d20e78712757ab1bf7eff6` |
+| create_market:aUSD/aBTC | `209b6380e094c617627313472162a0c89079215665cddf0c05ed4ce733f9d791` |
 
 Program/oracle ELF upload used many chunked write transactions (Arch **1232-byte** tx limit; write chunk 997). Explorer: `https://explorer.arch.network/testnet/tx/<txid>`
 
@@ -72,7 +83,7 @@ Program/oracle ELF upload used many chunked write transactions (Arch **1232-byte
 
 - Keys: only `autara-deploy/.keys-testnet/` (never `keys/*.key`).
 - ELF upload path: `elf_upload` sized for the 1232-byte limit.
-- `autara_program::id()` in `programs/autara-program/src/lib.rs` was synced to the new program pubkey and ELFs rebuilt before deploy.
-- Liquidity / supply positions were not seeded by this deploy script.
-- Artifact: `deployments/testnet.json` (dated copy: `deployments/testnet-2026-08-14.json`).
+- `autara_program::id()` in `programs/autara-program/src/lib.rs` was synced to the new program pubkey and ELFs rebuilt before the 2026-08-14 program deploy.
+- 2026-08-15: create-market only (`STEP_DEPLOY_*=false`, `STEP_INIT_CONFIG=false`) against the existing program — no program/oracle redeploy.
+- Artifact: `deployments/testnet.json` (dated copies: `deployments/testnet-2026-08-14.json`, `deployments/testnet-2026-08-15.json`).
 - History purge of old `keys/` material remains a separate coordinated step (not part of this redeploy).
