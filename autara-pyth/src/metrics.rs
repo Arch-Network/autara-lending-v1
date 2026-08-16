@@ -40,7 +40,7 @@ impl PusherMetrics {
         );
         let fetch_failures = counter(
             "autara_pusher_fetch_failures_total",
-            "Price fetch failures after Pyth and DIA fallbacks",
+            "Price fetch failures after Pyth (and DIA on testnet/localnet)",
         );
         let consecutive_failures = gauge(
             "autara_pusher_consecutive_failures",
