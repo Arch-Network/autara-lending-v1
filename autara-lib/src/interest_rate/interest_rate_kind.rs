@@ -35,9 +35,9 @@ impl InterestRateCurveKind {
         match self {
             InterestRateCurveKind::Fixed(rate) => {
                 // Reject negative rates (would cause NegativeInterestRate in sync_clock)
-                // and rates that would overflow checked_exp after 1 second (MAX_EXP_ARG ≈ 55.26)
+                // and rates that would overflow checked_exp after 1 second (MAX_EXP_ARG ≈ 54.75)
                 !rate.0.is_negative()
-                    && rate.0 <= crate::math::ifixed_point::IFixedPoint::from_i64_u64_ratio(5526, 100)
+                    && rate.0 <= crate::math::ifixed_point::IFixedPoint::from_i64_u64_ratio(5475, 100)
             }
             InterestRateCurveKind::Polyline(curve) => curve.validate().is_ok(),
             InterestRateCurveKind::Adaptive(_) => true,

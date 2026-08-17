@@ -14,7 +14,7 @@ use crate::{
 /// NOTE :
 /// If a market using this curve stays at extreme
 /// utilization (near 100%) and no transaction calls `sync_clock` for ~1.1+ years, the
-/// `linear_adaptation` value can exceed the domain of `checked_exp()` (~55.26), causing
+/// `linear_adaptation` value can exceed the domain of `checked_exp()` (~54.75), causing
 /// `new_rate_at_target` to permanently fail. Because `last_update_unix_timestamp` is only
 /// advanced on success, subsequent calls accumulate even larger elapsed times and also fail.
 /// In practice this is extremely unlikely since any supply/borrow/repay/liquidation triggers

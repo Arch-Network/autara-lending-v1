@@ -32,8 +32,10 @@ impl IFixedPoint {
     pub fn checked_exp(&self) -> LendingResult<Self> {
         // ln(2^-48) = -33.219280948873624
         const MIN_EXP_ARG: IFixedPoint = IFixedPoint::from_i64_u64_ratio(-3321, 100);
-        // ln(2^80) = 55.2624584632449
-        const MAX_EXP_ARG: IFixedPoint = IFixedPoint::from_i64_u64_ratio(5526, 100);
+        // I80F48::MAX ≈ 2^79, ln(2^79) = 54.758627264235679
+        // (must not exceed ln of the representable maximum: for larger args the
+        // final left shift would overflow the 128-bit representation)
+        const MAX_EXP_ARG: IFixedPoint = IFixedPoint::from_i64_u64_ratio(5475, 100);
         const LN_2: IFixedPoint =
             IFixedPoint::from_i64_u64_ratio(693147180559945309, 1000000000000000000);
         const LN_2_DIV_2: IFixedPoint =
@@ -141,12 +143,42 @@ pub mod tests {
     pub fn fixed_exp() {
         let x = [
             "0", "-0.001", "0.001", "-0.5", "-0.5", "1", "-1", "2", "-2", "-20", "20", "50",
+            "54.7",
         ];
         for x in x {
             let exp_fixed = IFixedPoint::lit(x).checked_exp().unwrap().to_float();
             let exp_float = x.parse::<f64>().unwrap().exp();
             assert_eq_float!(exp_fixed, exp_float, 0.0001) // max 1bps error
         }
+    }
+
+    #[test]
+    pub fn fixed_exp_rejects_args_above_representable_max() {
+        // ln(I80F48::MAX) ≈ 54.7586: anything above must error, never silently
+        // wrap into a negative value (the final left shift would drop high bits).
+        for x in ["54.76", "54.9", "55.0", "55.2", "55.26", "56", "100"] {
+            assert_eq!(
+                IFixedPoint::lit(x).checked_exp().unwrap_err(),
+                LendingError::InvalidExpArg,
+                "exp({x}) should be rejected"
+            );
+        }
+        // Results for valid positive args are always positive.
+        for x in ["0.001", "1", "30", "54", "54.7"] {
+            let exp = IFixedPoint::lit(x).checked_exp().unwrap();
+            assert!(!exp.is_negative(), "exp({x}) must be positive, got {exp}");
+        }
+    }
+
+    #[test]
+    pub fn checked_shift_left_overflow_returns_none() {
+        // 1.0 << 79 overflows the 80 integer bits (sign included) of I80F48
+        assert!(IFixedPoint::one().checked_shift(79).is_none());
+        // and stays exact when representable
+        assert_eq!(
+            IFixedPoint::one().checked_shift(78).unwrap(),
+            IFixedPoint::from_num_checked(2f64.powi(78)).unwrap()
+        );
     }
 
     #[test]
