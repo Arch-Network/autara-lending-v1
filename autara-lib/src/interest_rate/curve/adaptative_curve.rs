@@ -43,6 +43,12 @@ const MIN_RATE_AT_TARGET: InterestRatePerSecond =
 const MAX_RATE_AT_TARGET: InterestRatePerSecond =
     InterestRatePerSecond::const_from_apr(IFixedPoint::from_i64_u64_ratio(200, 100));
 
+/// Safe clamp bounds for `linear_adaptation` passed to `checked_exp()`.
+/// checked_exp domain: args ≤ -33.21 → Ok(0), args > 55.26 → Err. We clamp to those exact bounds.
+/// Fix for issue #47: prevents permanent market brick at extreme utilization after long idle.
+const MAX_SAFE_LINEAR_ADAPTATION: IFixedPoint = IFixedPoint::from_i64_u64_ratio(5526, 100);
+const MIN_SAFE_LINEAR_ADAPTATION: IFixedPoint = IFixedPoint::from_i64_u64_ratio(-3321, 100);
+
 impl AdaptiveInterestRateCurve {
     pub fn new() -> Self {
         AdaptiveInterestRateCurve {
@@ -121,8 +127,19 @@ impl AdaptiveInterestRateCurve {
         start_rate_at_target: InterestRatePerSecond,
         linear_adaptation: IFixedPoint,
     ) -> LendingResult<InterestRatePerSecond> {
+        // Clamp linear_adaptation to the safe domain of checked_exp (±55).
+        // Without this, a market idle at ≥90% utilization for ~1.1+ years permanently fails:
+        // checked_exp returns Err, last_update_unix_timestamp never advances, and every
+        // subsequent call accumulates more elapsed time — bricking the market forever.
+        let clamped = if linear_adaptation > MAX_SAFE_LINEAR_ADAPTATION {
+            MAX_SAFE_LINEAR_ADAPTATION
+        } else if linear_adaptation < MIN_SAFE_LINEAR_ADAPTATION {
+            MIN_SAFE_LINEAR_ADAPTATION
+        } else {
+            linear_adaptation
+        };
         start_rate_at_target
-            .safe_mul(linear_adaptation.checked_exp()?)
+            .safe_mul(clamped.checked_exp()?)
             .map(|x| InterestRatePerSecond::new(x).clamp(MIN_RATE_AT_TARGET, MAX_RATE_AT_TARGET))
     }
 }
