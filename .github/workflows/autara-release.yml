@@ -1,10 +1,11 @@
 # Autara release chain: readiness → program+oracle upgrade dry-run → optional real upgrade.
+# Real upgrades also publish the on-chain IDL in the same job (first-writer-wins).
 #
 # Operator flow (pre-mainnet):
 #   1. Actions → autara-release → Run workflow
 #   2. Choose network (testnet|mainnet) and readiness_mode (testnet|mainnet-safe)
 #   3. Leave run_real_upgrade=false for the first pass (dry-run only after readiness)
-#   4. Review readiness artifacts + upgrade dry-run summary
+#   4. Review readiness artifacts + upgrade dry-run summary (includes IDL account preview)
 #   5. Re-run with run_real_upgrade=true (and mainnet_confirm='DEPLOY MAINNET' on mainnet)
 #
 # Real upgrades still require the per-network GitHub Environment (reviewers) and
