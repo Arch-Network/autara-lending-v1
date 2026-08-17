@@ -4,6 +4,10 @@
 #
 #   ./autara-deploy/scripts/testnet-idl-upgrade.sh
 #
+# Prefer CI for routine releases: real `autara-upgrade` / `autara-release` /
+# `autara-deploy` jobs publish the IDL in the same workflow run (see
+# `_autara-action.yml`). This script remains for local/emergency one-shots.
+#
 # Publishing is deliberately part of THIS script rather than a follow-up step:
 # `idl_create_account` authorizes on `from.is_signer` alone and stamps that
 # signer as the IDL authority, and the account address is publicly derivable —

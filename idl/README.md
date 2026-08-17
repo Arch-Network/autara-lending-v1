@@ -11,9 +11,9 @@ There are two ways to get the IDL to the decoder, and this repo supports both:
   ship. This is what the runbook below covers.
 - **On-chain path** — the program publishes its own IDL on-chain under the
   standard `anchor:idl` account, so any Anchor/Satellite-aware tool discovers it
-  without an out-of-band import. Implemented in this same PR by the on-chain
-  handler (`programs/autara-program/src/processor/idl.rs`) and the
-  `publish_idl` client bin; requires a program upgrade.
+  without an out-of-band import. Handler: `programs/autara-program/src/processor/idl.rs`.
+  Client: `publish_idl` bin. **Automated in CI** on every real deploy/upgrade
+  (`_autara-action.yml`); requires the ELF that includes the handler to be live.
 
 ## Files
 
@@ -193,7 +193,10 @@ test txs or a testnet sync covering known supply/borrow txs).
   `get_program_name` / `get_program_name_from_hex` registrations
   (`shared/src/program_ids.rs`). This is required, not optional: builtin
   registration excludes the program from IDL candidacy by design.
-- On-chain publishing (the canonical IDL path) is implemented in this PR via the
-  native IDL handler (`processor/idl.rs`) and the `publish_idl` bin; it requires a
-  program upgrade (`upgrade_program`) and is the canonical alternative to the
-  import path above once the program is redeployed.
+- On-chain publishing (the canonical IDL path) is implemented via the native
+  IDL handler (`processor/idl.rs`) and the `publish_idl` bin. **CI publishes
+  automatically** on every real `autara-deploy` / `autara-upgrade` /
+  `autara-release` run — in the same job, immediately after the ELF is live —
+  because `idl_create_account` is first-writer-wins on a publicly derivable
+  address. Dry-runs only print the derived IDL account. For a local one-shot
+  (upgrade + publish), use `autara-deploy/scripts/testnet-idl-upgrade.sh`.
