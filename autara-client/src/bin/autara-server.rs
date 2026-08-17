@@ -418,7 +418,8 @@ async fn main() -> Result<(), anyhow::Error> {
     for (name, token) in tokens {
         let mint = parse_pubkey(&token.mint)?;
         let faucet_amount = token.faucet_amount.unwrap_or(default_faucet_amount);
-        let minter = TokenMinter::from_existing(arch_client.clone(), token_authority_keypair, mint);
+        let minter =
+            TokenMinter::from_existing(arch_client.clone(), token_authority_keypair, mint, network);
         tracing::info!(
             "Token minter for {} ({:?}) faucet_amount={}",
             name,

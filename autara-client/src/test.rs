@@ -74,6 +74,8 @@ pub struct AutaraTestEnv {
     pub arch_client: AsyncArchRpcClient,
     pub autara_program_pubkey: Pubkey,
     pub autara_oracle_program_pubkey: Pubkey,
+    /// Bitcoin network used to sign every setup transaction (mints, pushes).
+    pub network: bitcoin::Network,
     pub authority_keypair: Keypair,
     pub user_keypair: Keypair,
     pub user_pubkey: Pubkey,
@@ -126,9 +128,28 @@ impl AutaraTestEnv {
         autara_program_pubkey: Pubkey,
         autara_oracle_program_pubkey: Pubkey,
     ) -> anyhow::Result<Self> {
-        let (authority_keypair, authority, _) = generate_new_keypair(BITCOIN_NETWORK);
-        let (user_keypair, user_one_pubkey, _) = generate_new_keypair(BITCOIN_NETWORK);
-        let (user_two_keypair, user_two_pubkey, _) = generate_new_keypair(BITCOIN_NETWORK);
+        Self::new_with_network(
+            arch_client,
+            autara_program_pubkey,
+            autara_oracle_program_pubkey,
+            BITCOIN_NETWORK,
+        )
+        .await
+    }
+
+    /// Like [`AutaraTestEnv::new`] but signs every setup transaction (mints and
+    /// price pushes) with `network`. Callers targeting a specific cluster (e.g.
+    /// testnet4) should build `arch_client` with the same network so faucet
+    /// funding matches.
+    pub async fn new_with_network(
+        arch_client: AsyncArchRpcClient,
+        autara_program_pubkey: Pubkey,
+        autara_oracle_program_pubkey: Pubkey,
+        network: bitcoin::Network,
+    ) -> anyhow::Result<Self> {
+        let (authority_keypair, authority, _) = generate_new_keypair(network);
+        let (user_keypair, user_one_pubkey, _) = generate_new_keypair(network);
+        let (user_two_keypair, user_two_pubkey, _) = generate_new_keypair(network);
         tokio::try_join!(
             arch_client.create_and_fund_account_with_faucet(&user_keypair),
             arch_client.create_and_fund_account_with_faucet(&user_two_keypair),
@@ -141,13 +162,24 @@ impl AutaraTestEnv {
             (authority, 1 << 55),
         ];
         let (supply_minter, collateral_minter) = tokio::try_join!(
-            TokenMinter::new(arch_client.clone(), authority_keypair.clone(), &amounts),
-            TokenMinter::new(arch_client.clone(), authority_keypair.clone(), &amounts)
+            TokenMinter::new(
+                arch_client.clone(),
+                authority_keypair.clone(),
+                &amounts,
+                network
+            ),
+            TokenMinter::new(
+                arch_client.clone(),
+                authority_keypair.clone(),
+                &amounts,
+                network
+            )
         )?;
         Ok(Self {
             arch_client,
             autara_program_pubkey,
             autara_oracle_program_pubkey,
+            network,
             authority_keypair,
             user_keypair,
             user_two_keypair,
@@ -175,7 +207,7 @@ impl AutaraTestEnv {
         AutaraPythPusherClient {
             client: self.arch_client.clone(),
             autara_oracle_program_id: self.autara_oracle_program_pubkey,
-            network: BITCOIN_NETWORK,
+            network: self.network,
         }
         .push_pyth_price(&self.authority_keypair, self.supply_feed_id, &pyth)
         .await
@@ -186,7 +218,7 @@ impl AutaraTestEnv {
         AutaraPythPusherClient {
             client: self.arch_client.clone(),
             autara_oracle_program_id: self.autara_oracle_program_pubkey,
-            network: BITCOIN_NETWORK,
+            network: self.network,
         }
         .push_pyth_price(&self.authority_keypair, self.collateral_feed_id, &pyth)
         .await
@@ -197,7 +229,7 @@ impl AutaraTestEnv {
         AutaraPythPusherClient {
             client: self.arch_client.clone(),
             autara_oracle_program_id: self.autara_oracle_program_pubkey,
-            network: BITCOIN_NETWORK,
+            network: self.network,
         }
         .push_pyth_price(&self.authority_keypair, feed_id, &pyth)
         .await
@@ -207,6 +239,7 @@ impl AutaraTestEnv {
         let client = self.arch_client.clone();
         let authority = self.authority_keypair.clone();
         let autara_oracle_program_id = self.autara_oracle_program_pubkey;
+        let network = self.network;
         let feeds = [
             hex::encode(self.supply_feed_id),
             hex::encode(self.collateral_feed_id),
@@ -217,7 +250,7 @@ impl AutaraTestEnv {
                 &autara_oracle_program_id,
                 &authority,
                 &feeds,
-                BITCOIN_NETWORK,
+                network,
                 autara_pyth::push_interval_from_env(),
                 None,
             )
@@ -232,6 +265,7 @@ pub struct TokenMinter {
     authority_keypair: Keypair,
     authority_pubkey: Pubkey,
     mint_pubkey: Pubkey,
+    network: bitcoin::Network,
 }
 
 impl TokenMinter {
@@ -239,15 +273,18 @@ impl TokenMinter {
         client: AsyncArchRpcClient,
         authority_keypair: Keypair,
         users: &[(Pubkey, u64)],
+        network: bitcoin::Network,
     ) -> anyhow::Result<Self> {
         let authority_pubkey =
             Pubkey::from_slice(&authority_keypair.x_only_public_key().0.serialize());
-        let mint = create_mint_and_mint_custom_amounts(&client, authority_keypair, users).await?;
+        let mint =
+            create_mint_and_mint_custom_amounts(&client, authority_keypair, users, network).await?;
         Ok(Self {
             client,
             authority_keypair,
             authority_pubkey,
             mint_pubkey: mint,
+            network,
         })
     }
 
@@ -255,6 +292,7 @@ impl TokenMinter {
         client: AsyncArchRpcClient,
         authority_keypair: Keypair,
         mint_pubkey: Pubkey,
+        network: bitcoin::Network,
     ) -> Self {
         let authority_pubkey =
             Pubkey::from_slice(&authority_keypair.x_only_public_key().0.serialize());
@@ -263,6 +301,7 @@ impl TokenMinter {
             authority_keypair,
             authority_pubkey,
             mint_pubkey,
+            network,
         }
     }
 
@@ -300,7 +339,7 @@ impl TokenMinter {
             self.client.get_best_block_hash().await?.try_into()?,
         );
         let signers = vec![self.authority_keypair];
-        let txid = build_and_sign_transaction(message, signers, BITCOIN_NETWORK)
+        let txid = build_and_sign_transaction(message, signers, self.network)
             .expect("Failed to build and sign transaction");
         let txids = self.client.send_transactions(vec![txid]).await?;
         let processed_tx = self.client.wait_for_processed_transactions(txids).await?;
@@ -330,7 +369,7 @@ impl TokenMinter {
             self.client.get_best_block_hash().await?.try_into()?,
         );
         let signers = vec![self.authority_keypair];
-        let txid = build_and_sign_transaction(message, signers, BITCOIN_NETWORK)
+        let txid = build_and_sign_transaction(message, signers, self.network)
             .expect("Failed to build and sign transaction");
         let txids = self.client.send_transactions(vec![txid]).await?;
         let processed_tx = self.client.wait_for_processed_transactions(txids).await?;
@@ -349,6 +388,7 @@ pub async fn create_mint_and_mint_custom_amounts(
     client: &AsyncArchRpcClient,
     authority_and_payer_keypair: Keypair,
     users_and_amounts: &[(Pubkey, u64)],
+    network: bitcoin::Network,
 ) -> anyhow::Result<Pubkey> {
     let payer = Pubkey::from_slice(
         &authority_and_payer_keypair
@@ -358,7 +398,7 @@ pub async fn create_mint_and_mint_custom_amounts(
     );
 
     // Generate new mint keypair
-    let (mint_keypair, mint_pubkey, _) = generate_new_keypair(BITCOIN_NETWORK);
+    let (mint_keypair, mint_pubkey, _) = generate_new_keypair(network);
 
     // Step 1: Create the mint account
     let create_account_message = ArchMessage::new(
@@ -374,12 +414,9 @@ pub async fn create_mint_and_mint_custom_amounts(
     );
 
     let create_account_signers = vec![authority_and_payer_keypair, mint_keypair];
-    let create_account_txid = build_and_sign_transaction(
-        create_account_message,
-        create_account_signers,
-        BITCOIN_NETWORK,
-    )
-    .unwrap();
+    let create_account_txid =
+        build_and_sign_transaction(create_account_message, create_account_signers, network)
+            .unwrap();
 
     let txids = client.send_transactions(vec![create_account_txid]).await?;
     let processed_tx = client.wait_for_processed_transactions(txids).await?;
@@ -432,8 +469,7 @@ pub async fn create_mint_and_mint_custom_amounts(
 
     let initialize_signers = vec![authority_and_payer_keypair, mint_keypair];
     let initialize_txid =
-        build_and_sign_transaction(initialize_message, initialize_signers, BITCOIN_NETWORK)
-            .unwrap();
+        build_and_sign_transaction(initialize_message, initialize_signers, network).unwrap();
 
     let txids = client.send_transactions(vec![initialize_txid]).await?;
     let processed_tx = client.wait_for_processed_transactions(txids).await?;
