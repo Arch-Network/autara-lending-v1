@@ -25,13 +25,18 @@
 #   upgrade      STEP_DEPLOY_PROGRAM=true + STEP_DEPLOY_ORACLE=true (init off) ->
 #                reuse the EXISTING program + oracle keypairs (ids unchanged),
 #                build both ELFs, and re-upload via the SDK ProgramDeployer.
+#                Immediately publishes the on-chain IDL (same job) so the
+#                publicly-derivable IDL account cannot be claimed by a third party.
 #   setup-markets STEP_TOKEN_SETUP=true + STEP_CREATE_MARKET=true (deploy/init
 #                off) -> ensure the configured APL mints exist, then create a
 #                lending market per MARKET_PAIRS. Requires the program AND the
 #                global config to already exist. Analogous to CLAMM's seed step.
 #
 # Divergences from CLAMM's engine (intentional):
-#   - NO IDL build/publish stage: the autara-deploy crate has no IDL tooling.
+#   - IDL publish is wired into deploy + upgrade (NOT a separate workflow):
+#     `idl_create_account` is first-writer-wins on a publicly derivable address,
+#     so the publish must land in the same job, seconds after the ELF is live.
+#     Dry-runs only print the derived IDL account; real runs call `publish_idl`.
 #   - setup-markets sends instructions only (no SBF/ELF build): the mints are
 #     created out-of-band (autara-cli) and markets reuse the deployed program.
 #   - The oracle program needs no program-id sync (position-independent).
@@ -248,6 +253,42 @@ jobs:
             target/debug/autara-deploy
           fi
 
+      # ---- IDL: must follow deploy/upgrade in the SAME job --------------------
+      # `idl_create_account` stamps whichever signer lands Create first as the
+      # permanent IDL authority, and the account address is publicly derivable.
+      # A separate workflow (or a delayed manual step) leaves a land-grab window.
+      # Dry-runs only print the derived address; real runs publish immediately.
+      - name: Build publish_idl (post-sync)
+        if: ${{ inputs.action == 'deploy' || inputs.action == 'upgrade' }}
+        run: cargo build -q -p autara-client --bin publish_idl
+
+      - name: Preview IDL account (dry-run)
+        if: ${{ (inputs.action == 'deploy' || inputs.action == 'upgrade') && inputs.dry_run == true }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source autara-deploy/scripts/ci-load-env.sh
+          export AUTHORITY_KEY_PATH="$ADMIN_KEY_PATH"
+          # ci-load-env sets ARCH_RPC_URL + NETWORK for the target Environment.
+          target/debug/publish_idl --dry-run
+
+      - name: Publish IDL (immediately after ELF is live)
+        if: ${{ (inputs.action == 'deploy' || inputs.action == 'upgrade') && inputs.dry_run == false }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source autara-deploy/scripts/ci-load-env.sh
+          export AUTHORITY_KEY_PATH="$ADMIN_KEY_PATH"
+          # Testnet: top up the admin so Create/Write rent cannot strand a half-
+          # written IDL account. Mainnet has no faucet — admin must be pre-funded
+          # (same requirement as create_global_config / market creation).
+          FUND_FLAG=()
+          if [ "$NETWORK" = "testnet" ]; then
+            FUND_FLAG=(--fund)
+          fi
+          echo "Publishing on-chain IDL for program ${PROGRAM_ID} on ${NETWORK}…"
+          target/debug/publish_idl "${FUND_FLAG[@]}"
+
       # ---- initialize: create_global_config only (program must be deployed) ---
       - name: Initialize global config
         if: ${{ inputs.action == 'initialize' }}
@@ -302,6 +343,13 @@ jobs:
             echo "- action: \`${ACTION}\`"
             echo "- dry_run: \`${DRY_RUN}\`"
             echo "- program_id: \`${PROGRAM_ID:-unknown}\`"
+            if [ "$ACTION" = "deploy" ] || [ "$ACTION" = "upgrade" ]; then
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "- idl: dry-run preview only (see \`Preview IDL account\` step)"
+              else
+                echo "- idl: published in this run (see \`Publish IDL\` step)"
+              fi
+            fi
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
           for f in "$OUT" "$UPG_OUT" "$MKT_OUT"; do

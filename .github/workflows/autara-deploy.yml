@@ -1,7 +1,8 @@
-# Autara — deploy the programs (first-time). Builds the SBF ELFs after the
-# program-id sync, then uploads the autara-program + autara-oracle ELFs via the
-# SDK ProgramDeployer (idempotent/resumable). Does NOT create the global config
-# — run the `autara-initialize` action for that.
+# Autara — deploy the programs (first-time), then publish the on-chain IDL.
+# Builds the SBF ELFs after the program-id sync, uploads the autara-program +
+# autara-oracle ELFs via the SDK ProgramDeployer (idempotent/resumable), and
+# immediately publishes the IDL in the same job (first-writer-wins). Does NOT
+# create the global config — run the `autara-initialize` action for that.
 #
 # Thin dispatch wrapper around .github/workflows/_autara-action.yml (action=deploy).
 # See autara-deploy/scripts/DEPLOY.md for required Secrets.

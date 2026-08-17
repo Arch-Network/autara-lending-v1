@@ -187,9 +187,11 @@ Follow these steps in order. Steps 1–6 are operational prerequisites that
    markets). Or run the chained **`autara-deploy-testnet`** workflow (same three
    actions in order; `dry_run` defaults to true). Use `autara-upgrade` /
    `autara-release` for in-place **program + oracle** upgrades (ids unchanged).
-   Publish / redeploy the oracle pusher with **`autara-deploy-pusher`** (GHCR
-   always; Railway when `RAILWAY_*` Environment secrets are set — see
-   `docs/oracle-pusher.md`).
+   Real deploy/upgrade jobs also **publish the on-chain IDL** in the same run
+   (immediately after the ELF is live — see `idl/README.md`). Dry-runs only
+   print the derived IDL account. Publish / redeploy the oracle pusher with
+   **`autara-deploy-pusher`** (GHCR always; Railway when `RAILWAY_*` Environment
+   secrets are set — see `docs/oracle-pusher.md`).
 
 > **Upgrade-authority custody.** The deployer key is the program upgrade
 > authority (it signs the on-chain re-upload for `autara-upgrade`). Guard it like
