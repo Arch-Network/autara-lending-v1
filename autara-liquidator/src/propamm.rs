@@ -423,9 +423,17 @@ fn validate_quote_transaction(
         .sanitize()
         .map_err(|error| anyhow!("PropAMM RFQ message is invalid: {error:?}"))?;
     let message = &transaction.message;
+    let has_ata_prelude = match (
+        message.account_keys.len(),
+        message.instructions.len(),
+        message.header.num_readonly_unsigned_accounts,
+    ) {
+        (13, 1, 1) => false,
+        (14, 3, 2) => true,
+        _ => bail!("PropAMM RFQ transaction has an unexpected shape"),
+    };
     if message.header.num_required_signatures != 2
         || message.header.num_readonly_signed_accounts != 0
-        || message.header.num_readonly_unsigned_accounts != 1
     {
         bail!("PropAMM RFQ transaction has an unexpected header");
     }
@@ -434,10 +442,23 @@ fn validate_quote_transaction(
     {
         bail!("PropAMM RFQ transaction signer set or fee payer is invalid");
     }
-    if message.account_keys.len() != 13 || message.instructions.len() != 1 {
-        bail!("PropAMM RFQ transaction must contain exactly one trade instruction");
-    }
-    let instruction = &message.instructions[0];
+    let instruction = if has_ata_prelude {
+        validate_idempotent_ata_instruction(
+            message,
+            &message.instructions[0],
+            expected.user,
+            expected.market.base_mint,
+        )?;
+        validate_idempotent_ata_instruction(
+            message,
+            &message.instructions[1],
+            expected.user,
+            expected.market.quote_mint,
+        )?;
+        &message.instructions[2]
+    } else {
+        &message.instructions[0]
+    };
     let program_index = usize::from(instruction.program_id_index);
     if message.account_keys.get(program_index) != Some(&expected.service.program_id)
         || message.is_signer(program_index)
@@ -569,6 +590,31 @@ fn validate_quote_transaction(
         estimated_out: expected.estimated_out,
         expiry_ts: wire.expiry_ts,
     })
+}
+
+fn validate_idempotent_ata_instruction(
+    message: &arch_sdk::arch_program::sanitized::ArchMessage,
+    instruction: &arch_sdk::arch_program::sanitized::SanitizedInstruction,
+    user: Pubkey,
+    mint: Pubkey,
+) -> Result<()> {
+    let expected = autara_lib::token::create_ata_ix(&user, None, &user, &mint);
+    let program_index = usize::from(instruction.program_id_index);
+    if message.account_keys.get(program_index) != Some(&expected.program_id)
+        || message.is_signer(program_index)
+        || message.is_writable_index(program_index)
+        || instruction.data != expected.data
+        || instruction.accounts.len() != expected.accounts.len()
+    {
+        bail!("PropAMM RFQ ATA prelude is invalid");
+    }
+    for (index, expected_account) in instruction.accounts.iter().zip(expected.accounts.iter()) {
+        let index = usize::from(*index);
+        if message.account_keys.get(index) != Some(&expected_account.pubkey) {
+            bail!("PropAMM RFQ ATA prelude account is invalid");
+        }
+    }
+    Ok(())
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -777,6 +823,30 @@ mod tests {
         assert_eq!(quote.amount_in, 100);
         assert_eq!(quote.estimated_out, 1_000);
         assert_eq!(quote.expiry_ts, 1_020_000);
+    }
+
+    #[test]
+    fn accepts_idempotent_ata_prelude_from_live_rfq_service() {
+        let fixture = fixture_with_ata_prelude(RfqSide::Sell, 100, 1_000, 1_020_000, 990);
+
+        let quote = validate_quote_transaction(&fixture.transaction, &fixture.request).unwrap();
+
+        assert_eq!(quote.side, RfqSide::Sell);
+        assert_eq!(quote.amount_in, 100);
+        assert_eq!(quote.estimated_out, 1_000);
+    }
+
+    #[test]
+    fn rejects_changed_idempotent_ata_prelude() {
+        let fixture = fixture_with_ata_prelude(RfqSide::Sell, 100, 1_000, 1_020_000, 990);
+
+        let mut changed = fixture.transaction.clone();
+        changed.message.instructions[0].data[0] = 0;
+        assert!(validate_quote_transaction(&changed, &fixture.request).is_err());
+
+        let mut changed = fixture.transaction.clone();
+        changed.message.instructions[1].accounts[1] = 1;
+        assert!(validate_quote_transaction(&changed, &fixture.request).is_err());
     }
 
     #[test]
@@ -1002,6 +1072,27 @@ mod tests {
         expiry_ts: u128,
         min_out: u64,
     ) -> Fixture {
+        fixture_inner(side, amount_in, estimated_out, expiry_ts, min_out, false)
+    }
+
+    fn fixture_with_ata_prelude(
+        side: RfqSide,
+        amount_in: u64,
+        estimated_out: u64,
+        expiry_ts: u128,
+        min_out: u64,
+    ) -> Fixture {
+        fixture_inner(side, amount_in, estimated_out, expiry_ts, min_out, true)
+    }
+
+    fn fixture_inner(
+        side: RfqSide,
+        amount_in: u64,
+        estimated_out: u64,
+        expiry_ts: u128,
+        min_out: u64,
+        include_ata_prelude: bool,
+    ) -> Fixture {
         let service = ServiceMetadata {
             program_id: key(1),
             config_pubkey: derive(&key(1), &[b"config", key(2).as_ref()]),
@@ -1056,10 +1147,26 @@ mod tests {
             accounts,
             data,
         };
+        let mut instructions = Vec::new();
+        if include_ata_prelude {
+            instructions.push(autara_lib::token::create_ata_ix(
+                &user,
+                None,
+                &user,
+                &market.base_mint,
+            ));
+            instructions.push(autara_lib::token::create_ata_ix(
+                &user,
+                None,
+                &user,
+                &market.quote_mint,
+            ));
+        }
+        instructions.push(instruction);
         let transaction = RuntimeTransaction {
             version: 0,
             signatures: Vec::new(),
-            message: ArchMessage::new(&[instruction], Some(user), Hash::from([9; 32])),
+            message: ArchMessage::new(&instructions, Some(user), Hash::from([9; 32])),
         };
         let estimated_quote = EstimatedQuote {
             base_amount,
