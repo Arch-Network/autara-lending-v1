@@ -1,6 +1,6 @@
 {
   "rpc_url": "https://rpc.testnet.arch.network",
-  "autara_program_id": "53def2dc8516302842b10e356914d2a5f6b33425ba42aec684f706aa1cf64192",
+  "autara_program_id": "2aa41c8f71f0ede3f374c15ea1ca6096c3f1c15a10da6530c0ecfa48ba109513",
   "liquidator_keypair": "/home/ubuntu/autara/liquidator/keys/liquidator.key",
   "network": "testnet",
   "poll_interval_secs": 5,
@@ -22,7 +22,7 @@
     "slippage_bps": 100,
     "pools": [
       {
-        "pool": "06db06761eb1f114167ea2bbc4cf98cf8f98fbfc0ad18d1821e724cfeeb03461",
+        "pool": "583e05109012a896e635a4c457ce39feeeb32d92c1c8919233ba7dc20607f12b",
         "token_a": "1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9",
         "token_b": "55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45"
       }

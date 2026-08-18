@@ -222,6 +222,17 @@ enum TxCommands {
         min_collateral: Option<u64>,
     },
 
+    /// Add a liquidator to a market's whitelist (curator only)
+    AddWhitelistedLiquidator {
+        /// Market pubkey
+        #[arg(long)]
+        market: String,
+
+        /// Liquidator authority pubkey
+        #[arg(long)]
+        liquidator: String,
+    },
+
     /// Redeem curator fees
     RedeemCuratorFees {
         /// Market pubkey
@@ -729,6 +740,20 @@ async fn handle_tx_command(
                 .liquidate(&market_key, &position_key, max_repay, min_collateral, None)
                 .await?;
             println!("Liquidation successful!");
+            println!("Events: {:#?}", events);
+        }
+
+        TxCommands::AddWhitelistedLiquidator { market, liquidator } => {
+            let market_key = parse_pubkey(&market)?;
+            let liquidator_key = parse_pubkey(&liquidator)?;
+            println!(
+                "Whitelisting liquidator {:?} for market {:?}...",
+                liquidator_key, market_key
+            );
+            let events = client
+                .add_whitelisted_liquidator(&market_key, liquidator_key)
+                .await?;
+            println!("Liquidator whitelisted successfully!");
             println!("Events: {:#?}", events);
         }
 
@@ -1255,5 +1280,25 @@ fn print_oracle_provider_info(provider: autara_lib::oracle::oracle_provider::Ora
             println!("  Program ID: {:?}", chaos.program_id);
             println!("  Required Signatures: {}", chaos.required_signatures);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_add_whitelisted_liquidator_transaction() {
+        let parsed = Cli::try_parse_from([
+            "autara-cli",
+            "tx",
+            "add-whitelisted-liquidator",
+            "--market",
+            "e66015deca68f6357b4ebfd7195a7808617082ad310b9c2b7f3db3ab3ca1a5b9",
+            "--liquidator",
+            "be6fec0e8983f218a5af6ed2f7a95bba8e83ad26d5183fee3231f5e837182b46",
+        ]);
+
+        assert!(parsed.is_ok());
     }
 }
