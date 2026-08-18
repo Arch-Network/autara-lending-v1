@@ -1,0 +1,36 @@
+[package]
+name = "autara-deploy"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "autara-deploy"
+path = "src/main.rs"
+
+[dependencies]
+# Instruction builders + PDA derivation (create_global_config_ix, find_global_config_pda).
+autara-lib = { workspace = true }
+# Pulled in ONLY for the compiled-in program id constant (`autara_program::id()`),
+# which the on-chain program uses for global-config PDA derivation + ownership
+# checks. We depend on the lib WITHOUT the `entrypoint` feature so no SBF
+# entrypoint symbol is linked into this host binary.
+autara-program = { workspace = true }
+
+arch_program = { workspace = true }
+arch_sdk = { workspace = true }
+apl-token = { workspace = true }
+
+tokio = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+bs58 = { workspace = true }
+sha2 = "0.10"
+# Zero-copy decode of on-chain Market / GlobalConfig / Pyth oracle accounts in
+# the read-only `verify` subcommand (autara-lib state types are bytemuck Pod).
+bytemuck = { workspace = true }
+# Read-only JSON-RPC probe of the running autara-server in `verify`.
+reqwest = { workspace = true }

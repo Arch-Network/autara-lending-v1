@@ -1,0 +1,328 @@
+# Reusable Autara action engine (workflow_call).
+#
+# This is the SINGLE implementation of the Autara deploy/initialize/upgrade
+# flow. The three user-facing entry points are thin dispatch wrappers that call
+# this with a different `action`:
+#
+#   autara-deploy.yml        -> action: deploy
+#   autara-initialize.yml    -> action: initialize
+#   autara-upgrade.yml       -> action: upgrade
+#   autara-setup-markets.yml -> action: setup-markets
+#
+# Keeping one engine (instead of three near-identical workflows) means the
+# critical bits cannot drift: the program-id derive -> sync -> rebuild ->
+# build-sbf ORDERING, the autara_program::id()==program_pubkey guard, key
+# custody, the mainnet gating, and config loading (autara-deploy/scripts/
+# ci-load-env.sh + sync-program-id.sh — shared with the interactive deploy.sh).
+#
+# Actions (the `autara-deploy` step gates are env flags read by src/main.rs):
+#   deploy       STEP_DEPLOY_PROGRAM=true + STEP_DEPLOY_ORACLE=true,
+#                STEP_INIT_CONFIG=false -> deploy the program + oracle ELFs.
+#                First-time deploy. The global config is a SEPARATE action.
+#   initialize   STEP_INIT_CONFIG=true (deploy steps off) -> create_global_config
+#                only. Separable from deploy so the config can be (re)created
+#                without redeploying. Requires the program ALREADY deployed.
+#   upgrade      STEP_DEPLOY_PROGRAM=true (oracle/init off) -> reuse the EXISTING
+#                program keypair (program id / autara_program::id() unchanged),
+#                build the new ELF, and re-upload via the SDK ProgramDeployer.
+#   setup-markets STEP_TOKEN_SETUP=true + STEP_CREATE_MARKET=true (deploy/init
+#                off) -> ensure the configured APL mints exist, then create a
+#                lending market per MARKET_PAIRS. Requires the program AND the
+#                global config to already exist. Analogous to CLAMM's seed step.
+#
+# Divergences from CLAMM's engine (intentional):
+#   - NO IDL build/publish stage: the autara-deploy crate has no IDL tooling.
+#   - setup-markets sends instructions only (no SBF/ELF build): the mints are
+#     created out-of-band (autara-cli) and markets reuse the deployed program.
+#   - The oracle program needs no program-id sync (position-independent).
+#
+# Safety: real runs (dry_run=false) require the per-network GitHub Environment
+# (mainnet can demand reviewers) and, for mainnet, a typed confirmation.
+
+name: _autara-action
+
+on:
+  workflow_call:
+    inputs:
+      action:
+        description: 'deploy | initialize | upgrade | setup-markets'
+        type: string
+        required: true
+      network:
+        description: 'testnet | mainnet'
+        type: string
+        required: true
+      dry_run:
+        description: 'Print addresses + preflight, send NO transactions.'
+        type: boolean
+        default: true
+      mainnet_confirm:
+        description: "Type EXACTLY 'DEPLOY MAINNET' to authorize a REAL mainnet run."
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # Bind to the per-network Environment so mainnet can require reviewers
+    # (repo Settings -> Environments -> mainnet) and hold the network's Secrets.
+    environment: ${{ inputs.network }}
+    env:
+      SOLANA_VERSION: ${{ vars.SOLANA_VERSION || '2.2.14' }}
+      ACTION: ${{ inputs.action }}
+      NETWORK: ${{ inputs.network }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      # Optional secret override (only applied by ci-load-env.sh when non-empty).
+      CI_ARCH_RPC_URL: ${{ secrets.ARCH_RPC_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ----- Safety gate: a REAL mainnet run needs an explicit typed opt-in ----
+      - name: Mainnet confirmation gate
+        if: ${{ inputs.network == 'mainnet' && inputs.dry_run == false }}
+        env:
+          MAINNET_CONFIRM: ${{ inputs.mainnet_confirm }}
+        run: |
+          set -euo pipefail
+          if [ "$MAINNET_CONFIRM" != "DEPLOY MAINNET" ]; then
+            echo "::error::Refusing a REAL mainnet ${ACTION}: set mainnet_confirm to exactly 'DEPLOY MAINNET'." >&2
+            exit 1
+          fi
+          echo "Mainnet real-run confirmation accepted for ${ACTION}."
+
+      # Host toolchain for building the `autara-deploy` tool. Must be >= 1.85 so
+      # Cargo understands the `edition2024` feature pulled in by transitive deps
+      # (e.g. getrandom 0.4.1 via tempfile/uuid). This is independent of the
+      # SBF/cargo-build-sbf toolchain installed below for the on-chain ELF build.
+      - name: Install Rust 1.85.1
+        uses: dtolnay/rust-toolchain@1.85.1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # SBF compiler — only for a REAL deploy/upgrade (initialize and all
+      # dry-runs send no ELF).
+      - name: Install Solana toolchain (cargo-build-sbf)
+        if: ${{ (inputs.action == 'deploy' || inputs.action == 'upgrade') && inputs.dry_run == false }}
+        run: |
+          set -euo pipefail
+          echo "Installing Agave/Solana ${SOLANA_VERSION} (provides cargo-build-sbf)…"
+          installer="$(curl -sSfL "https://release.anza.xyz/v${SOLANA_VERSION}/install")"
+          sh -c "$installer"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      # Decode base64 keypair secrets into 0600 temp files (never echoed). All
+      # actions need them: program key to derive/sync the id, deployer to sign
+      # the ELF upload, admin to sign create_global_config; oracle for the
+      # deploy action. These map 1:1 to the *_KEY_PATH vars src/config.rs reads.
+      - name: Decode keypairs
+        env:
+          PROGRAM_KEYPAIR_B64: ${{ secrets.PROGRAM_KEYPAIR_B64 }}
+          ORACLE_KEYPAIR_B64: ${{ secrets.ORACLE_KEYPAIR_B64 }}
+          DEPLOYER_KEYPAIR_B64: ${{ secrets.DEPLOYER_KEYPAIR_B64 }}
+          ADMIN_KEYPAIR_B64: ${{ secrets.ADMIN_KEYPAIR_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          KEYS="$RUNNER_TEMP/keys"
+          mkdir -p "$KEYS"
+          if [ -z "${PROGRAM_KEYPAIR_B64:-}" ] || [ -z "${ORACLE_KEYPAIR_B64:-}" ] || \
+             [ -z "${DEPLOYER_KEYPAIR_B64:-}" ] || [ -z "${ADMIN_KEYPAIR_B64:-}" ]; then
+            echo "::error::Missing one or more keypair secrets (PROGRAM_KEYPAIR_B64 / ORACLE_KEYPAIR_B64 / DEPLOYER_KEYPAIR_B64 / ADMIN_KEYPAIR_B64) on the ${NETWORK} Environment." >&2
+            exit 1
+          fi
+          printf '%s' "$PROGRAM_KEYPAIR_B64"  | base64 -d > "$KEYS/program.json"
+          printf '%s' "$ORACLE_KEYPAIR_B64"   | base64 -d > "$KEYS/oracle.json"
+          printf '%s' "$DEPLOYER_KEYPAIR_B64" | base64 -d > "$KEYS/deployer.json"
+          printf '%s' "$ADMIN_KEYPAIR_B64"    | base64 -d > "$KEYS/admin.json"
+          {
+            echo "PROGRAM_KEY_PATH=$KEYS/program.json"
+            echo "ORACLE_KEY_PATH=$KEYS/oracle.json"
+            echo "DEPLOYER_KEY_PATH=$KEYS/deployer.json"
+            echo "ADMIN_KEY_PATH=$KEYS/admin.json"
+          } >> "$GITHUB_ENV"
+
+      # Build ONCE (pre-sync) only to derive the program keypair's pubkey.
+      - name: Build autara-deploy (pre-sync, for pubkey derivation)
+        run: cargo build -q -p autara-deploy
+
+      # The dry-run preflight prints `program_id: <64-hex>` for the loaded
+      # program keypair (== its pubkey), regardless of the compiled-in id (the
+      # id-guard is a warning on dry-run). A clean env keeps the committed env
+      # file from leaking in, and an unreachable RPC makes the preflight reads
+      # fail fast without touching a real node.
+      - name: Derive program id
+        run: |
+          set -euo pipefail
+          OUT="$(env -i HOME="$HOME" PATH="$PATH" \
+            NETWORK=localnet ARCH_RPC_URL=http://127.0.0.1:1 \
+            PROGRAM_KEY_PATH="$PROGRAM_KEY_PATH" \
+            ORACLE_KEY_PATH="$ORACLE_KEY_PATH" \
+            DEPLOYER_KEY_PATH="$DEPLOYER_KEY_PATH" \
+            ADMIN_KEY_PATH="$ADMIN_KEY_PATH" \
+            target/debug/autara-deploy --dry-run 2>/dev/null || true)"
+          PROGRAM_ID="$(printf '%s\n' "$OUT" | awk '/^program_id:/{print $2; exit}')"
+          if ! printf '%s' "$PROGRAM_ID" | grep -qE '^[0-9a-f]{64}$'; then
+            echo "::error::Could not derive program id from the program keypair (got: '$PROGRAM_ID')." >&2
+            exit 1
+          fi
+          echo "Derived program_id: $PROGRAM_ID"
+          echo "PROGRAM_ID=$PROGRAM_ID" >> "$GITHUB_ENV"
+
+      # CRITICAL ORDERING: rewrite autara_program::id() to the program keypair
+      # (idempotent; a no-op for an upgrade where the id is unchanged).
+      - name: Sync program id
+        run: bash autara-deploy/scripts/sync-program-id.sh "$PROGRAM_ID"
+
+      # CRITICAL ORDERING: rebuild so the host tool's compile-time
+      # autara_program::id() matches the synced id (the deploy guard reads it;
+      # initialize derives the global-config PDA from it).
+      - name: Rebuild autara-deploy (post-sync)
+        run: cargo build -q -p autara-deploy
+
+      # CRITICAL ORDERING: the ELF(s) are built AFTER the sync so the on-chain
+      # autara_program::id() matches. deploy/upgrade real runs only. The oracle
+      # is position-independent, so only `deploy` builds it.
+      - name: Build SBF ELFs (post-sync)
+        if: ${{ (inputs.action == 'deploy' || inputs.action == 'upgrade') && inputs.dry_run == false }}
+        run: |
+          set -euo pipefail
+          # secp256k1-sys's C build is compiled by the platform-tools cross clang
+          # (--target=sbpf-solana-solana), which falls back to the host glibc
+          # headers. Two gaps must be filled for it to compile on the runner:
+          #   1. clang doesn't add the Debian multiarch include dir, so
+          #      <bits/libc-header-start.h> (via <string.h>) isn't found — point
+          #      cc-rs at it (CFLAGS is honored as the SBF-target fallback).
+          #   2. glibc's <gnu/stubs.h> pulls in <gnu/stubs-32.h>, shipped by the
+          #      32-bit dev headers (gcc-multilib), not present by default.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-multilib
+          MULTIARCH="$(gcc -print-multiarch 2>/dev/null || echo x86_64-linux-gnu)"
+          export CFLAGS="-I/usr/include/${MULTIARCH}${CFLAGS:+ $CFLAGS}"
+          echo "Building autara-program ELF (cargo-build-sbf --features entrypoint)…"
+          ( cd programs/autara-program && cargo-build-sbf --features entrypoint )
+          test -f target/deploy/autara_program.so || { echo "::error::cargo build-sbf did not produce target/deploy/autara_program.so" >&2; exit 1; }
+          echo "autara_program.so sha256: $(sha256sum target/deploy/autara_program.so | cut -d' ' -f1)"
+          if [ "$ACTION" = "deploy" ]; then
+            echo "Building autara-oracle ELF (cargo-build-sbf --features entrypoint)…"
+            ( cd programs/autara-oracle && cargo-build-sbf --features entrypoint )
+            test -f target/deploy/autara_oracle.so || { echo "::error::cargo build-sbf did not produce target/deploy/autara_oracle.so" >&2; exit 1; }
+            echo "autara_oracle.so sha256: $(sha256sum target/deploy/autara_oracle.so | cut -d' ' -f1)"
+          fi
+
+      # ---- deploy: program + oracle ELFs (global config is a separate action)
+      - name: Deploy programs
+        if: ${{ inputs.action == 'deploy' }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source autara-deploy/scripts/ci-load-env.sh
+          export STEP_DEPLOY_PROGRAM=true STEP_DEPLOY_ORACLE=true STEP_INIT_CONFIG=false
+          export STEP_TOKEN_SETUP=false STEP_CREATE_MARKET=false
+          mkdir -p deployments
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN: no transactions will be sent."
+            target/debug/autara-deploy --dry-run
+          else
+            echo "REAL DEPLOY to ${NETWORK}: transactions WILL be sent."
+            target/debug/autara-deploy
+          fi
+
+      # ---- upgrade: reuse the EXISTING program keypair, re-upload the program -
+      - name: Upgrade program
+        if: ${{ inputs.action == 'upgrade' }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source autara-deploy/scripts/ci-load-env.sh
+          export STEP_DEPLOY_PROGRAM=true STEP_DEPLOY_ORACLE=false STEP_INIT_CONFIG=false
+          export STEP_TOKEN_SETUP=false STEP_CREATE_MARKET=false
+          export OUTPUT_PATH="deployments/${NETWORK}-upgrade.json"
+          mkdir -p deployments
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN: previewing upgrade; no transactions will be sent."
+            target/debug/autara-deploy --dry-run
+          else
+            echo "REAL UPGRADE on ${NETWORK} (program id unchanged): transactions WILL be sent."
+            target/debug/autara-deploy
+          fi
+
+      # ---- initialize: create_global_config only (program must be deployed) ---
+      - name: Initialize global config
+        if: ${{ inputs.action == 'initialize' }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source autara-deploy/scripts/ci-load-env.sh
+          export STEP_DEPLOY_PROGRAM=false STEP_DEPLOY_ORACLE=false STEP_INIT_CONFIG=true
+          export STEP_TOKEN_SETUP=false STEP_CREATE_MARKET=false
+          mkdir -p deployments
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN: no transactions will be sent."
+            target/debug/autara-deploy --dry-run
+          else
+            echo "REAL initialize on ${NETWORK} (program must already be deployed): transactions WILL be sent."
+            target/debug/autara-deploy
+          fi
+
+      # ---- setup-markets: ensure token mints + create the configured markets -
+      # (program + global config must ALREADY exist). Mirrors CLAMM's separate
+      # seed action: market creation is split out from deploy/initialize so it
+      # can be (re)run idempotently without redeploying or recreating config.
+      - name: Setup markets
+        if: ${{ inputs.action == 'setup-markets' }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source autara-deploy/scripts/ci-load-env.sh
+          export STEP_DEPLOY_PROGRAM=false STEP_DEPLOY_ORACLE=false STEP_INIT_CONFIG=false
+          export STEP_TOKEN_SETUP=true STEP_CREATE_MARKET=true
+          export OUTPUT_PATH="deployments/${NETWORK}-markets.json"
+          mkdir -p deployments
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN: previewing token-setup + market derived addresses; no transactions will be sent."
+            target/debug/autara-deploy --dry-run
+          else
+            echo "REAL setup-markets on ${NETWORK} (program + global config must exist): transactions WILL be sent."
+            target/debug/autara-deploy
+          fi
+
+      # ---- Job summary + artifact (read from the artifact; never secrets) -----
+      - name: Write job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          OUT="deployments/${NETWORK}.json"
+          UPG_OUT="deployments/${NETWORK}-upgrade.json"
+          MKT_OUT="deployments/${NETWORK}-markets.json"
+          {
+            echo "## Autara ${ACTION} — ${NETWORK}"
+            echo ""
+            echo "- action: \`${ACTION}\`"
+            echo "- dry_run: \`${DRY_RUN}\`"
+            echo "- program_id: \`${PROGRAM_ID:-unknown}\`"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          for f in "$OUT" "$UPG_OUT" "$MKT_OUT"; do
+            if [ -f "$f" ]; then
+              echo "### Artifact \`$f\`" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              python3 autara-deploy/scripts/ci-summary.py "$f" "$NETWORK" >> "$GITHUB_STEP_SUMMARY" || \
+                echo "(could not render $f; see uploaded artifact)" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Upload deployment artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autara-${{ inputs.action }}-${{ inputs.network }}
+          path: |
+            deployments/${{ inputs.network }}.json
+            deployments/${{ inputs.network }}-upgrade.json
+            deployments/${{ inputs.network }}-markets.json
+          if-no-files-found: warn

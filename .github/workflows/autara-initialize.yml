@@ -1,0 +1,49 @@
+# Autara — create the protocol global config (admin + fee receiver + fee share).
+# Separable from `autara-deploy` so the config can be (re)created without
+# redeploying. Requires the program to be ALREADY deployed on the target network
+# (the engine syncs autara_program::id() to the program keypair and rebuilds the
+# host tool, so the create_global_config PDA targets the deployed program id).
+#
+# NOTE: this creates ONLY the global config. Token-setup + market creation live
+# in the separate autara-setup-markets.yml workflow (action=setup-markets),
+# mirroring CLAMM's initialize/seed split.
+#
+# Thin dispatch wrapper around .github/workflows/_autara-action.yml (action=initialize).
+
+name: autara-initialize
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target network'
+        type: choice
+        required: true
+        options:
+          - testnet
+          - mainnet
+      dry_run:
+        description: 'Dry run (print addresses + preflight, send NO transactions). Leave true for the first run.'
+        type: boolean
+        default: true
+      mainnet_confirm:
+        description: "Type EXACTLY 'DEPLOY MAINNET' to authorize a REAL (dry_run=false) mainnet initialize."
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autara-action-${{ github.event.inputs.network }}
+  cancel-in-progress: false
+
+jobs:
+  initialize:
+    uses: ./.github/workflows/_autara-action.yml
+    secrets: inherit
+    with:
+      action: initialize
+      network: ${{ inputs.network }}
+      dry_run: ${{ inputs.dry_run }}
+      mainnet_confirm: ${{ inputs.mainnet_confirm }}

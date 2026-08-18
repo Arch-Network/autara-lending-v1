@@ -8,6 +8,14 @@ authority.key
 user.key
 .DS_Store
 .env
-.claude/settings.local.json
+
+# Deploy tooling: gitignored key directories (autara-deploy). NEVER commit keys.
+.keys-testnet/
+.keys-mainnet/
 .keys-*/
-.claude
+
+# Local planning artifacts must never be committed.
+/docs/superpowers/
+
+# Local Git worktrees used for isolated feature development.
+/.worktrees/

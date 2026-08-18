@@ -1,0 +1,45 @@
+# Autara — deploy the programs (first-time). Builds the SBF ELFs after the
+# program-id sync, then uploads the autara-program + autara-oracle ELFs via the
+# SDK ProgramDeployer (idempotent/resumable). Does NOT create the global config
+# — run the `autara-initialize` action for that.
+#
+# Thin dispatch wrapper around .github/workflows/_autara-action.yml (action=deploy).
+# See autara-deploy/scripts/DEPLOY.md for required Secrets.
+
+name: autara-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target network'
+        type: choice
+        required: true
+        options:
+          - testnet
+          - mainnet
+      dry_run:
+        description: 'Dry run (print addresses + preflight, send NO transactions). Leave true for the first run.'
+        type: boolean
+        default: true
+      mainnet_confirm:
+        description: "Type EXACTLY 'DEPLOY MAINNET' to authorize a REAL (dry_run=false) mainnet deploy."
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autara-action-${{ github.event.inputs.network }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_autara-action.yml
+    secrets: inherit
+    with:
+      action: deploy
+      network: ${{ inputs.network }}
+      dry_run: ${{ inputs.dry_run }}
+      mainnet_confirm: ${{ inputs.mainnet_confirm }}

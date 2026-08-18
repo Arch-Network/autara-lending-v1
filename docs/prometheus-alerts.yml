@@ -1,0 +1,123 @@
+groups:
+  - name: autara-lending
+    rules:
+      - alert: AutaraOracleStale
+        expr: autara_oracle_stale == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Autara oracle is stale
+          description: >-
+            Oracle validation failed for market {{ $labels.market_address }}
+            on the {{ $labels.side }} side.
+
+      # TODO(risk-ops): Keep this 60-second value aligned with each market's
+      # approved oracle max_age before loading this rule.
+      - alert: AutaraOraclePublishAgeTooHigh
+        expr: autara_oracle_publish_time_age_seconds > 60
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Autara oracle publish age exceeds the expected maximum
+          description: >-
+            Oracle publish age is {{ $value }} seconds for market
+            {{ $labels.market_address }} on the {{ $labels.side }} side.
+
+      # A zero balance cannot pay a transaction fee. TODO(risk-ops): add a
+      # warning rule with the approved lamport amount for 24 hours of runway.
+      - alert: AutaraPusherOutOfFunds
+        expr: autara_pusher_balance_lamports <= 0 or autara_pusher_signer_balance_lamports <= 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Autara oracle pusher has no lamports
+          description: >-
+            Dedicated pusher has a balance of {{ $value }} lamports.
+
+      # Pusher /health goes 503 when no successful push in ~90s. Also page if
+      # successes stop incrementing while the process is still scraped.
+      - alert: AutaraPusherNotPushing
+        expr: time() - autara_pusher_last_success_unixtime > 90
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Autara oracle pusher has not succeeded recently
+          description: >-
+            Last successful push was {{ $value }} seconds ago (wall clock minus
+            autara_pusher_last_success_unixtime).
+
+      - alert: AutaraPusherConsecutiveFailures
+        expr: autara_pusher_consecutive_failures > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Autara oracle pusher is failing repeatedly
+          description: >-
+            The pusher has {{ $value }} consecutive fetch/push failures.
+
+      - alert: AutaraVaultReconciliationCollectionFailed
+        expr: autara_vault_reconciliation_success == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Autara vault reconciliation could not collect a balance
+          description: >-
+            The {{ $labels.vault_type }} vault for market
+            {{ $labels.market_address }} could not be reconciled.
+
+      # TODO(risk-ops): replace zero with an approved per-vault token-atom
+      # tolerance if normal accounting dust is expected.
+      - alert: AutaraVaultReconciliationMismatch
+        expr: abs(autara_vault_reconciliation_delta_atoms) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Autara vault balance differs from protocol accounting
+          description: >-
+            The {{ $labels.vault_type }} vault for market
+            {{ $labels.market_address }} differs by {{ $value }} token atoms.
+
+      # TODO(risk-ops): approve when a nonzero liquidatable-position count is
+      # paging-worthy versus ticket-worthy for each market.
+      - alert: AutaraLiquidatablePositionsPresent
+        expr: autara_market_liquidatable_positions > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Autara market has liquidatable positions
+          description: >-
+            Market {{ $labels.market_address }} has {{ $value }}
+            liquidatable positions.
+
+      # This increments before the configured circuit breaker terminates the
+      # process. TODO(ops): set the for-duration below the configured
+      # max_consecutive_failures and poll interval.
+      - alert: AutaraLiquidatorCircuitBreakerRisk
+        expr: autara_liquidator_consecutive_failures > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Autara liquidator has consecutive live-operation failures
+          description: >-
+            The liquidator has {{ $value }} consecutive failures and may halt
+            when its configured circuit-breaker limit is reached.
+
+      - alert: AutaraLiquidatorReloadFailures
+        expr: increase(autara_liquidator_reload_failures_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Autara liquidator failed to reload state
+          description: >-
+            The liquidator recorded {{ $value }} state reload failures in the
+            last ten minutes.

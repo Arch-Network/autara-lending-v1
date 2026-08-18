@@ -1,0 +1,48 @@
+# Autara — ensure the token mints exist and create the configured lending
+# markets (one per MARKET_PAIRS entry). Separable from deploy/initialize, so
+# markets can be (re)created idempotently without redeploying the program or
+# recreating the global config. Requires the program AND the global config to be
+# ALREADY present on the target network.
+#
+# Analogous to CLAMM's seed action (the initialize/seed split): deploy ships the
+# program, initialize creates the global config, and this creates the markets.
+#
+# Thin dispatch wrapper around .github/workflows/_autara-action.yml (action=setup-markets).
+
+name: autara-setup-markets
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target network'
+        type: choice
+        required: true
+        options:
+          - testnet
+          - mainnet
+      dry_run:
+        description: 'Dry run (print token-setup + market derived addresses, send NO transactions). Leave true for the first run.'
+        type: boolean
+        default: true
+      mainnet_confirm:
+        description: "Type EXACTLY 'DEPLOY MAINNET' to authorize a REAL (dry_run=false) mainnet setup-markets."
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autara-action-${{ github.event.inputs.network }}
+  cancel-in-progress: false
+
+jobs:
+  setup-markets:
+    uses: ./.github/workflows/_autara-action.yml
+    secrets: inherit
+    with:
+      action: setup-markets
+      network: ${{ inputs.network }}
+      dry_run: ${{ inputs.dry_run }}
+      mainnet_confirm: ${{ inputs.mainnet_confirm }}

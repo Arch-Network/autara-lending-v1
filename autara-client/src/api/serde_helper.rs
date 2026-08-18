@@ -2,12 +2,13 @@ pub mod serde_pubkey {
     use arch_sdk::arch_program::pubkey::Pubkey;
     use serde::{Deserialize, Deserializer, Serializer};
 
+    use super::parse_pubkey_str;
+
     pub fn serialize<S>(pubkey: &Pubkey, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let s = hex::encode(pubkey.as_ref());
-        serializer.serialize_str(&s)
+        serializer.serialize_str(&bs58::encode(pubkey.serialize()).into_string())
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Pubkey, D::Error>
@@ -15,9 +16,7 @@ pub mod serde_pubkey {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        Ok(Pubkey::from_slice(
-            &hex::decode(s).map_err(serde::de::Error::custom)?,
-        ))
+        parse_pubkey_str(&s).map_err(serde::de::Error::custom)
     }
 }
 
@@ -25,25 +24,26 @@ pub mod serde_pubkey_vec {
     use arch_sdk::arch_program::pubkey::Pubkey;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use super::parse_pubkey_str;
+
     pub fn serialize<S>(keys: &[Pubkey], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let hex_keys: Vec<String> = keys.iter().map(|k| hex::encode(k.as_ref())).collect();
-        hex_keys.serialize(serializer)
+        let keys: Vec<String> = keys
+            .iter()
+            .map(|k| bs58::encode(k.serialize()).into_string())
+            .collect();
+        keys.serialize(serializer)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Pubkey>, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let hex_keys: Vec<String> = Vec::deserialize(deserializer)?;
-        hex_keys
-            .into_iter()
-            .map(|s| {
-                let bytes = hex::decode(s).map_err(serde::de::Error::custom)?;
-                Ok(Pubkey::from_slice(&bytes))
-            })
+        let keys: Vec<String> = Vec::deserialize(deserializer)?;
+        keys.into_iter()
+            .map(|s| parse_pubkey_str(&s).map_err(serde::de::Error::custom))
             .collect()
     }
 }
@@ -52,12 +52,14 @@ pub mod serde_optional_pubkey {
     use arch_sdk::arch_program::pubkey::Pubkey;
     use serde::{Deserialize, Deserializer, Serializer};
 
+    use super::parse_pubkey_str;
+
     pub fn serialize<S>(pubkey: &Option<Pubkey>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         match pubkey {
-            Some(pk) => serializer.serialize_str(&hex::encode(pk.as_ref())),
+            Some(pk) => serializer.serialize_str(&bs58::encode(pk.serialize()).into_string()),
             None => serializer.serialize_none(),
         }
     }
@@ -68,19 +70,17 @@ pub mod serde_optional_pubkey {
     {
         let s = Option::<String>::deserialize(deserializer)?;
         match s {
-            Some(s) => {
-                let bytes = hex::decode(s).map_err(serde::de::Error::custom)?;
-                Ok(Some(Pubkey::from_slice(&bytes)))
-            }
+            Some(s) => Ok(Some(
+                parse_pubkey_str(&s).map_err(serde::de::Error::custom)?,
+            )),
             None => Ok(None),
         }
     }
 }
 
 pub mod serde_from_str {
-    use std::str::FromStr;
-
     use serde::{Deserialize, Deserializer, Serializer};
+    use std::str::FromStr;
 
     pub fn serialize<S, T>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -129,4 +129,31 @@ pub mod serde_from_optional_str {
             None => Ok(None),
         }
     }
+}
+
+/// Parse a pubkey from base58 (preferred) or hex (transition).
+fn parse_pubkey_str(raw: &str) -> Result<arch_sdk::arch_program::pubkey::Pubkey, String> {
+    use arch_sdk::arch_program::pubkey::Pubkey;
+    use std::str::FromStr;
+
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("empty pubkey".into());
+    }
+    // Prefer base58 (human-readable / explorer form).
+    if let Ok(bytes) = bs58::decode(raw).into_vec() {
+        if bytes.len() == 32 {
+            return Ok(Pubkey::from_slice(&bytes));
+        }
+    }
+    // Fall back to hex for older clients.
+    if let Ok(pk) = Pubkey::from_str(raw) {
+        return Ok(pk);
+    }
+    if let Ok(bytes) = hex::decode(raw) {
+        if bytes.len() == 32 {
+            return Ok(Pubkey::from_slice(&bytes));
+        }
+    }
+    Err(format!("invalid pubkey '{raw}' (expected base58 or hex)"))
 }

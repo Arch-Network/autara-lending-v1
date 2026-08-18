@@ -52,7 +52,9 @@ impl<'a, 'b> CreateMarketAccounts<'a, 'b> {
     pub fn validate(&self) -> LendingProgramResult<()> {
         let (expected_global_config, _) = autara_lib::pda::find_global_config_pda(&crate::id());
         if *self.global_config.key() != expected_global_config {
-            return Err(crate::error::LendingAccountValidationError::InvalidProtocolAuthority.into());
+            return Err(
+                crate::error::LendingAccountValidationError::InvalidProtocolAuthority.into(),
+            );
         }
         Ok(())
     }

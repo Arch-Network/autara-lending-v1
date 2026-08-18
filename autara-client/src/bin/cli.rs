@@ -22,7 +22,8 @@ use autara_lib::{
     token::{create_ata_ix, get_associated_token_address},
 };
 use autara_pyth::{
-    fetch_and_push_feeds, fetch_pyth_price, get_pyth_account, AutaraPythPusherClient,
+    fetch_and_push_feeds, fetch_pyth_price, get_pyth_account, push_interval_from_env,
+    AutaraPythPusherClient,
 };
 use clap::{Parser, Subcommand};
 use tracing_subscriber::{util::SubscriberInitExt, EnvFilter};
@@ -46,6 +47,10 @@ struct Cli {
     /// Path to tokens.json config (for resolving token names in output)
     #[arg(long, default_value = "tokens.json")]
     tokens: String,
+
+    /// Autara program id (hex or base58). Defaults to the stage program id.
+    #[arg(long)]
+    program_id: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -241,6 +246,17 @@ enum TxCommands {
         #[arg(long)]
         amount: u64,
     },
+
+    /// Socialize the loss of an underwater borrow position (curator only, requires LTV >= 1)
+    SocializeLoss {
+        /// Market pubkey
+        #[arg(long)]
+        market: String,
+
+        /// Authority of the borrow position to socialize
+        #[arg(long)]
+        authority: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -291,7 +307,9 @@ enum OracleCommands {
         feed: Vec<String>,
     },
 
-    /// Push a dummy price to the on-chain oracle (for testing)
+    /// Push a dummy price to the on-chain oracle (for testing).
+    /// The signer that first creates a feed becomes its bound authority;
+    /// later pushes to that feed must use the same signer.
     PushPrice {
         /// Pyth feed ID (hex, with or without 0x prefix)
         #[arg(long)]
@@ -302,11 +320,18 @@ enum OracleCommands {
         price: f64,
     },
 
-    /// Continuously fetch and push Pyth feeds to on-chain oracle
+    /// Continuously fetch and push Pyth feeds to on-chain oracle.
+    /// The signer that first creates a feed becomes its bound authority;
+    /// later pushes to that feed must use the same signer.
     PushFeeds {
         /// Pyth feed IDs (hex, with 0x prefix)
         #[arg(long, num_args = 1..)]
         feed: Vec<String>,
+
+        /// Seconds between push iterations. Falls back to the
+        /// PUSH_INTERVAL_SECS env var, then to the default 5s.
+        #[arg(long)]
+        push_interval_secs: Option<u64>,
     },
 
     /// Show oracle feed info for a market
@@ -382,13 +407,15 @@ async fn main() -> Result<()> {
     let signer_pubkey = Pubkey::from_slice(&signer.x_only_public_key().0.serialize());
     tracing::info!("Using signer: {:?}", signer_pubkey);
 
+    // Resolve program id (default: stage program id)
+    let program_id = match cli.program_id {
+        Some(ref s) => parse_pubkey(s)?,
+        None => autara_stage_program_id(),
+    };
+
     // Create client
-    let mut client = AutaraFullClientWithSigner::new_simple(
-        arch_client,
-        network,
-        autara_stage_program_id(),
-        signer,
-    );
+    let mut client =
+        AutaraFullClientWithSigner::new_simple(arch_client, network, program_id, signer);
 
     // Load state
     tracing::info!("Loading protocol state...");
@@ -726,6 +753,41 @@ async fn handle_tx_command(
             println!("Donating {} atoms to market {:?}...", amount, market_key);
             let events = client.donate_supply(&market_key, amount).await?;
             println!("Donate supply successful!");
+            println!("Events: {:#?}", events);
+        }
+
+        TxCommands::SocializeLoss { market, authority } => {
+            let market_key = parse_pubkey(&market)?;
+            let authority_key = parse_pubkey(&authority)?;
+            let (position_key, position) = client
+                .read_client()
+                .get_borrow_position(&market_key, &authority_key);
+            if position.is_none() {
+                anyhow::bail!(
+                    "No borrow position found for authority {:?} in market {:?}",
+                    authority_key,
+                    market_key
+                );
+            }
+            match client
+                .read_client()
+                .get_borrow_position_health(&market_key, &authority_key)
+            {
+                Ok(health) => {
+                    println!("=== Position To Socialize ===");
+                    println!("Position: {:?}", position_key);
+                    println!("LTV: {}", health.ltv);
+                    println!("Borrowed Atoms: {}", health.borrowed_atoms);
+                    println!("Collateral Atoms: {}", health.collateral_atoms);
+                }
+                Err(e) => println!("Could not get borrow position health: {}", e),
+            }
+            println!(
+                "Socializing loss for position {:?} in market {:?}...",
+                position_key, market_key
+            );
+            let events = client.socialize_loss(&market_key, &position_key).await?;
+            println!("Socialize loss successful!");
             println!("Events: {:#?}", events);
         }
     }
@@ -1122,7 +1184,10 @@ async fn handle_oracle_command(
             println!("Oracle Account: {:?}", oracle_account);
         }
 
-        OracleCommands::PushFeeds { feed } => {
+        OracleCommands::PushFeeds {
+            feed,
+            push_interval_secs,
+        } => {
             let feeds: Vec<String> = feed
                 .iter()
                 .map(|f| {
@@ -1134,15 +1199,28 @@ async fn handle_oracle_command(
                 })
                 .collect();
 
+            let push_interval = push_interval_secs
+                .map(Duration::from_secs)
+                .unwrap_or_else(push_interval_from_env);
             println!(
-                "Starting continuous Pyth feed pusher for {} feeds...",
-                feeds.len()
+                "Starting continuous Pyth feed pusher for {} feeds (every {:?})...",
+                feeds.len(),
+                push_interval
             );
             println!("Press Ctrl+C to stop.");
             for f in &feeds {
                 println!("  Feed: {}", f);
             }
-            fetch_and_push_feeds(rpc, &oracle_program_id, &signer_keypair, &feeds, network).await;
+            fetch_and_push_feeds(
+                rpc,
+                &oracle_program_id,
+                &signer_keypair,
+                &feeds,
+                network,
+                push_interval,
+                None,
+            )
+            .await;
         }
 
         OracleCommands::MarketFeeds { market } => {

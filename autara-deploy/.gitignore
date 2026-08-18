@@ -1,0 +1,4 @@
+# Gitignored key directories for the deploy tooling. NEVER commit key material.
+.keys-testnet/
+.keys-mainnet/
+.keys-*/

@@ -1,0 +1,57 @@
+# Autara CI — build-check the deploy tool (and the program/lib paths that feed
+# it) on PRs and pushes. The actual deploy/initialize/upgrade flows are manual
+# workflow_dispatch actions (autara-deploy / autara-initialize / autara-upgrade),
+# all driven by the shared engine .github/workflows/_autara-action.yml.
+#
+# Scope note: the on-chain program crates (autara-program / autara-oracle) are
+# built with `cargo-build-sbf` for the SBF target, not host `cargo check`, so CI
+# format-checks them and compiles autara-program host-side transitively via
+# `cargo check -p autara-deploy` (it depends on autara-program without the
+# `entrypoint` feature). The SBF ELF build is exercised by the deploy engine.
+
+name: autara-ci
+
+on:
+  pull_request:
+    paths:
+      - 'autara-deploy/**'
+      - 'programs/autara-program/**'
+      - 'programs/autara-oracle/**'
+      - 'autara-lib/**'
+      - '.github/workflows/autara-ci.yml'
+      - '.github/workflows/_autara-action.yml'
+  push:
+    paths:
+      - 'autara-deploy/**'
+      - 'programs/autara-program/**'
+      - 'programs/autara-oracle/**'
+      - 'autara-lib/**'
+      - '.github/workflows/autara-ci.yml'
+      - '.github/workflows/_autara-action.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Host toolchain for `cargo fmt` / `cargo check -p autara-deploy`. Must be
+      # >= 1.85 so Cargo understands the `edition2024` feature pulled in by
+      # transitive deps (e.g. time-core 0.1.8). This is independent of the
+      # SBF/cargo-build-sbf toolchain used for the on-chain ELF build.
+      - name: Install Rust 1.85.1
+        uses: dtolnay/rust-toolchain@1.85.1
+        with:
+          components: rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt -p autara-deploy -p autara-program -p autara-oracle --check
+
+      - name: Cargo check
+        run: cargo check -p autara-deploy

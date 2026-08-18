@@ -1,0 +1,40 @@
+{
+  "network": "testnet",
+  "arch_rpc_url": "https://rpc.testnet.arch.network",
+  "deployed_at_unix": 1782431547,
+  "program_id": "34cf72a92dd76322a42f13f99e51cf7c03221f4adbd4ee7e0c409c4161dfe20c",
+  "oracle_id": "8d24068aa026fd2e6ccca6e7b64a944b0e384df279b15f599ddd4a5285d592e8",
+  "build_commit": "c8d73d5",
+  "program_elf_path": "target/deploy/autara_program.so",
+  "program_elf_sha256": "8decb2df08a663f840c13e686414641e17270f6ea39967c0ac45a888013ff558",
+  "oracle_elf_path": "target/deploy/autara_oracle.so",
+  "oracle_elf_sha256": "8c4d42dc6ca11ad9650e6c80fcee38b111fec70baae46be2b7850893f17d3694",
+  "deployer": "a28851ef4616ffe966843c18d966c326d915ee2a3c861971aef2ac1c590e613f",
+  "admin": "dc9b490d714063ab92aa1edcd368b437cddd140bbb34663dba8d1e7f05daae86",
+  "fee_receiver": "dc9b490d714063ab92aa1edcd368b437cddd140bbb34663dba8d1e7f05daae86",
+  "protocol_fee_share_bps": 5000,
+  "global_config": "295e38899221566a25ae47433889bc85bdcb33cce1f25db88060665765a19e37",
+  "tokens": [
+    {
+      "label": "BTC",
+      "mint": "36a97410055bbbdc52b421d0c95f76d85eca066b83db8b14f64665b178c93d8b",
+      "decimals": 8
+    },
+    {
+      "label": "ETH",
+      "mint": "7250792453cc3a0bd015778f240dd50b552c48c153b7b83e3ef0c441aff9483c",
+      "decimals": 8
+    },
+    {
+      "label": "USDC",
+      "mint": "a80fa79ee82952b0a127f50e7d469dae1a51315d4267ca38d7907ad5df5cb3cb",
+      "decimals": 6
+    }
+  ],
+  "transactions": [
+    {
+      "step": "create_global_config",
+      "txid": "d43a52f2f28a00083bdd81942b5387f62bb90579d9d7dc13b5b4f15b659f8662"
+    }
+  ]
+}

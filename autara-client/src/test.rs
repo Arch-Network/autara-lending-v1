@@ -188,6 +188,8 @@ impl AutaraTestEnv {
                 &authority,
                 &feeds,
                 BITCOIN_NETWORK,
+                autara_pyth::push_interval_from_env(),
+                None,
             )
             .await
         });

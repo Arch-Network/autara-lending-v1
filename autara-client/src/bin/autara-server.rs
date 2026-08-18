@@ -87,7 +87,17 @@ struct TokenEntry {
     decimals: u8,
     #[serde(rename = "keyFile")]
     key_file: String,
+    /// Optional per-token faucet amount (raw units) minted to a new user by the
+    /// server's `initialize`. Falls back to FAUCET_MINT_AMOUNT (env) / the
+    /// DEFAULT_FAUCET_MINT_AMOUNT constant when unset.
+    #[serde(rename = "faucetAmount")]
+    faucet_amount: Option<u64>,
 }
+
+/// Default per-user faucet amount (raw units) when neither tokens.json nor the
+/// FAUCET_MINT_AMOUNT env var specifies one. Mirrors CLAMM's TEST_MINT_AMOUNT
+/// (1e12 raw); replaces the previously hardcoded 100_000_000_000.
+const DEFAULT_FAUCET_MINT_AMOUNT: u64 = 1_000_000_000_000;
 
 fn parse_network(network: &str) -> anyhow::Result<Network> {
     match network.to_lowercase().as_str() {
@@ -112,8 +122,8 @@ fn parse_pubkey(s: &str) -> anyhow::Result<Pubkey> {
 /// Map token name -> Pyth feed ID (bytes)
 fn pyth_feed_for_token(name: &str) -> Option<[u8; 32]> {
     let feed_hex = match name.to_uppercase().as_str() {
-        "BTC" => BTC_FEED,
-        "USDC" => USDC_FEED,
+        "BTC" | "ABTC" => BTC_FEED,
+        "USDC" | "AUSD" => USDC_FEED,
         "ETH" => ETH_FEED,
         _ => return None,
     };
@@ -350,15 +360,21 @@ async fn main() -> Result<(), anyhow::Error> {
         .iter()
         .filter_map(|name| {
             let feed_hex = match name.to_uppercase().as_str() {
-                "BTC" => Some(BTC_FEED),
-                "USDC" => Some(USDC_FEED),
+                "BTC" | "ABTC" => Some(BTC_FEED),
+                "USDC" | "AUSD" => Some(USDC_FEED),
                 "ETH" => Some(ETH_FEED),
                 _ => None,
             }?;
             Some(feed_hex.to_string())
         })
         .collect();
-    if !feeds.is_empty() {
+    // When a dedicated `autara-pyth` service pushes prices (the mainnet/testnet
+    // symmetric setup), set DISABLE_PRICE_PUSHER=1 here so the server doesn't
+    // also push the same feeds. Default (unset) keeps the built-in pusher.
+    let disable_price_pusher = std::env::var("DISABLE_PRICE_PUSHER")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if !feeds.is_empty() && !disable_price_pusher {
         tracing::info!("Spawning Pyth feed pusher for {} feeds", feeds.len());
         let pusher_client = arch_client.clone();
         let pusher_signer = signer_keypair;
@@ -370,6 +386,8 @@ async fn main() -> Result<(), anyhow::Error> {
                 &pusher_signer,
                 &feeds,
                 network,
+                autara_pyth::push_interval_from_env(),
+                None,
             )
             .await;
         });
@@ -382,13 +400,32 @@ async fn main() -> Result<(), anyhow::Error> {
         });
     }
 
-    // Build token minters from config (using token authority key)
+    // Per-user faucet amount default: FAUCET_MINT_AMOUNT env, else the constant.
+    let default_faucet_amount: u64 = match std::env::var("FAUCET_MINT_AMOUNT")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(v) => v
+            .trim()
+            .parse()
+            .context("invalid FAUCET_MINT_AMOUNT (expected raw u64)")?,
+        None => DEFAULT_FAUCET_MINT_AMOUNT,
+    };
+
+    // Build token minters from config (using token authority key), each paired
+    // with its per-token faucet amount.
     let mut minters = Vec::new();
     for (name, token) in tokens {
         let mint = parse_pubkey(&token.mint)?;
+        let faucet_amount = token.faucet_amount.unwrap_or(default_faucet_amount);
         let minter = TokenMinter::from_existing(arch_client.clone(), token_authority_keypair, mint);
-        tracing::info!("Token minter for {} ({:?})", name, mint);
-        minters.push(minter);
+        tracing::info!(
+            "Token minter for {} ({:?}) faucet_amount={}",
+            name,
+            mint,
+            faucet_amount
+        );
+        minters.push((minter, faucet_amount));
     }
 
     // Start the shared state (auto-reloading)

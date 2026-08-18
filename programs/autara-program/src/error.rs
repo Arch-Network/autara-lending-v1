@@ -1,5 +1,7 @@
 use arch_program::program_error::ProgramError;
-use autara_lib::error::{ErrorWithContext, LendingError};
+use arch_program::pubkey::Pubkey;
+use autara_lib::error::{DisplayCow, ErrorWithContext, LendingError};
+use autara_lib::token::pubkey_base58;
 use autara_program_lib::accounts::AccountValidationError;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
@@ -7,6 +9,28 @@ pub type LendingProgramResult<T = ()> = Result<T, LendingProgramError>;
 
 #[derive(Debug, Clone)]
 pub struct LendingProgramError(pub ErrorWithContext<LendingProgramErrorKind>);
+
+impl LendingProgramError {
+    pub fn with_msg(mut self, msg: impl Into<std::borrow::Cow<'static, str>>) -> Self {
+        self.0.msg.push(DisplayCow(msg.into()));
+        self
+    }
+}
+
+pub fn validation_err(
+    err: LendingAccountValidationError,
+    msg: impl Into<std::borrow::Cow<'static, str>>,
+) -> LendingProgramError {
+    LendingProgramError::from(err).with_msg(msg)
+}
+
+pub fn format_pubkey_pair(label_a: &str, a: &Pubkey, label_b: &str, b: &Pubkey) -> String {
+    format!(
+        "{label_a}={} {label_b}={}",
+        pubkey_base58(a),
+        pubkey_base58(b)
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LendingProgramErrorKind {

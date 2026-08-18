@@ -1,0 +1,48 @@
+# Autara — upgrade the deployed program in place. Reuses the EXISTING program
+# keypair, so the program id / autara_program::id() are UNCHANGED; builds the
+# new ELF after the (no-op) program-id sync and re-uploads it via the SDK
+# ProgramDeployer, signed by the deployer (upgrade authority).
+#
+# Upgrade authority custody: the on-chain loader upgrade is signed by the
+# DEPLOYER_KEYPAIR_B64 secret on the network Environment — it MUST be the same
+# deployer/authority used for the original deploy. The oracle is NOT touched.
+#
+# Thin dispatch wrapper around .github/workflows/_autara-action.yml (action=upgrade).
+
+name: autara-upgrade
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target network'
+        type: choice
+        required: true
+        options:
+          - testnet
+          - mainnet
+      dry_run:
+        description: 'Dry run (preview the upgrade, send NO transactions). Leave true for the first run.'
+        type: boolean
+        default: true
+      mainnet_confirm:
+        description: "Type EXACTLY 'DEPLOY MAINNET' to authorize a REAL (dry_run=false) mainnet upgrade."
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autara-action-${{ github.event.inputs.network }}
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    uses: ./.github/workflows/_autara-action.yml
+    secrets: inherit
+    with:
+      action: upgrade
+      network: ${{ inputs.network }}
+      dry_run: ${{ inputs.dry_run }}
+      mainnet_confirm: ${{ inputs.mainnet_confirm }}

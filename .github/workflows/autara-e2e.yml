@@ -1,0 +1,162 @@
+# Autara end-to-end lending-flow integration test (testnet only).
+#
+# Runs the full lending cycle (supply -> deposit collateral -> borrow -> repay
+# -> withdraw collateral -> withdraw supply) against the deployed Autara testnet
+# market via the `e2e_flow` example, asserting position state after each step.
+#
+# NON-BLOCKING by design: this workflow has NO `pull_request` / `push` trigger,
+# so it is never a required check and cannot gate merges. It runs only on a
+# nightly schedule and on manual dispatch.
+#
+# Self-contained: it starts its OWN Pyth price pusher (autara-pyth) feeding the
+# oracle program, otherwise borrow/repay would fail with OracleRateTooOld. The
+# pusher auto-generates and faucets its own signer (no secret needed).
+#
+# Required repo secrets (base64 of the real testnet mint-authority key files):
+#   AUTARA_E2E_AUSD_AUTHORITY_B64
+#   AUTARA_E2E_ABTC_AUTHORITY_B64
+# See the PR description for the exact `gh secret set` commands.
+
+name: autara-e2e
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly at 07:00 UTC.
+    - cron: '0 7 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      # ---- testnet targets (mirror the example defaults) ----
+      E2E_RPC: https://rpc.testnet.arch.network
+      E2E_NETWORK: testnet4
+      E2E_PROGRAM_ID: 34cf72a92dd76322a42f13f99e51cf7c03221f4adbd4ee7e0c409c4161dfe20c
+      E2E_MARKET: d8d679b946aafb22322f477cd5f196700f181aa3f712ca09e486fc77cedc0cce
+      E2E_AUSD_MINT: 8ec480c6e5458e7d37dc2a9f7d7d149a02d8182a38523b037905203ff36b71f6
+      E2E_ABTC_MINT: 627ecd24366c89314b12aa08a1b2fffc3890cb9cf64fb04fe3e95c7182b23dfb
+      # ---- oracle pusher targets ----
+      ORACLE_PROGRAM_ID: 8d24068aa026fd2e6ccca6e7b64a944b0e384df279b15f599ddd4a5285d592e8
+      ORACLE_FEEDS: 0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a
+    steps:
+      - uses: actions/checkout@v4
+
+      # Host toolchain >= 1.85 (matches autara-ci.yml / _autara-action.yml) so
+      # Cargo understands the `edition2024` feature pulled in by transitive deps.
+      - name: Install Rust 1.85.1
+        uses: dtolnay/rust-toolchain@1.85.1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Decode the two mint-authority key secrets to 0600 files. These are real
+      # testnet APL mint authorities (64-hex secret), used to mint aUSD/aBTC to
+      # the throwaway test user. The pusher needs no secret.
+      - name: Decode mint-authority keys
+        env:
+          AUSD_B64: ${{ secrets.AUTARA_E2E_AUSD_AUTHORITY_B64 }}
+          ABTC_B64: ${{ secrets.AUTARA_E2E_ABTC_AUTHORITY_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          KEYS="$RUNNER_TEMP/keys"
+          mkdir -p "$KEYS"
+          if [ -z "${AUSD_B64:-}" ] || [ -z "${ABTC_B64:-}" ]; then
+            echo "::error::Missing AUTARA_E2E_AUSD_AUTHORITY_B64 / AUTARA_E2E_ABTC_AUTHORITY_B64 repo secrets." >&2
+            exit 1
+          fi
+          printf '%s' "$AUSD_B64" | base64 -d > "$KEYS/aUSD-authority.json"
+          printf '%s' "$ABTC_B64" | base64 -d > "$KEYS/aBTC-authority.json"
+          chmod 600 "$KEYS/aUSD-authority.json" "$KEYS/aBTC-authority.json"
+          {
+            echo "E2E_AUSD_AUTHORITY=$KEYS/aUSD-authority.json"
+            echo "E2E_ABTC_AUTHORITY=$KEYS/aBTC-authority.json"
+          } >> "$GITHUB_ENV"
+
+      # Fresh throwaway user key (64-hex secret) created + faucet-funded by the
+      # example at runtime.
+      - name: Generate test user key
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/e2e"
+          openssl rand -hex 32 | tr -d '\n' > "$RUNNER_TEMP/e2e/user.key"
+          echo "E2E_USER_KEY=$RUNNER_TEMP/e2e/user.key" >> "$GITHUB_ENV"
+
+      - name: Build pusher + example
+        run: |
+          set -euo pipefail
+          cargo build --release -p autara-pyth
+          cargo build -p autara-client --example e2e_flow
+
+      # Start the Pyth pusher in the background and wait until it confirms it is
+      # actually pushing (log line "Sending ...") before running the flow.
+      - name: Start Pyth pusher
+        run: |
+          set -euo pipefail
+          LOG="$RUNNER_TEMP/pusher.log"
+          : > "$LOG"
+          echo "PUSHER_LOG=$LOG" >> "$GITHUB_ENV"
+          ./target/release/autara-pyth \
+            --rpc "$E2E_RPC" \
+            --network testnet \
+            --program-id "$ORACLE_PROGRAM_ID" \
+            --feeds "$ORACLE_FEEDS" \
+            > "$LOG" 2>&1 &
+          PUSHER_PID=$!
+          echo "PUSHER_PID=$PUSHER_PID" >> "$GITHUB_ENV"
+          echo "Pusher started (pid=$PUSHER_PID); waiting up to 60s for it to push..."
+          for i in $(seq 1 60); do
+            if ! kill -0 "$PUSHER_PID" 2>/dev/null; then
+              echo "::error::Pusher process exited early. Log:" >&2
+              cat "$LOG" >&2
+              exit 1
+            fi
+            if grep -q "Sending" "$LOG"; then
+              echo "Pusher is pushing prices (after ${i}s):"
+              grep -m1 "Sending" "$LOG"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Pusher never logged a 'Sending' (price push) within 60s. Log:" >&2
+          cat "$LOG" >&2
+          exit 1
+
+      # Run the lending flow. Exit status reflects the example's exit code
+      # (non-zero on any step FAIL).
+      - name: Run e2e lending flow
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/e2e_output.log"
+          echo "E2E_OUTPUT=$OUT" >> "$GITHUB_ENV"
+          set +e
+          cargo run -p autara-client --example e2e_flow 2>&1 | tee "$OUT"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "example exit code: $rc"
+          exit "$rc"
+
+      - name: Stop Pyth pusher
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ -n "${PUSHER_PID:-}" ]; then
+            kill "$PUSHER_PID" 2>/dev/null || true
+          fi
+          pkill -f 'target/release/autara-pyth' 2>/dev/null || true
+          echo "pusher stopped"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autara-e2e-logs
+          path: |
+            ${{ runner.temp }}/pusher.log
+            ${{ runner.temp }}/e2e_output.log
+          if-no-files-found: warn

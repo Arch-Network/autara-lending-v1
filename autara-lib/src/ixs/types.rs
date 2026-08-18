@@ -61,6 +61,10 @@ pub enum AurataInstructionTag {
     /// Donate APL tokens to the supply vault of a market, increasing the total supply and the yield for all suppliers
     /// without receiving any supply shares in return.
     DonateSupply,
+    /// Move an unhealthy position's collateral to the curator for an off-chain sale.
+    BeginCapitalSweep,
+    /// Repay debt and restore unused collateral after a curator capital sweep.
+    SettleCapitalSweep,
 }
 
 impl TryFrom<u8> for AurataInstructionTag {
@@ -88,6 +92,8 @@ impl TryFrom<u8> for AurataInstructionTag {
             17 => Ok(AurataInstructionTag::WithdrawRepayApl),
             18 => Ok(AurataInstructionTag::SocializeLoss),
             19 => Ok(AurataInstructionTag::DonateSupply),
+            20 => Ok(AurataInstructionTag::BeginCapitalSweep),
+            21 => Ok(AurataInstructionTag::SettleCapitalSweep),
             _ => Err(value),
         }
     }
@@ -115,6 +121,8 @@ pub enum AurataInstruction {
     WithdrawRepayApl(super::borrow::WithdrawRepayAplInstruction),
     SocializeLoss(super::liquidation::SocializeLossInstruction),
     DonateSupply(super::supply::DonateSupplyInstruction),
+    BeginCapitalSweep(super::liquidation::BeginCapitalSweepInstruction),
+    SettleCapitalSweep(super::liquidation::SettleCapitalSweepInstruction),
 }
 
 impl BorshSerialize for AurataInstruction {
@@ -195,6 +203,14 @@ impl BorshSerialize for AurataInstruction {
                 AurataInstructionTag::DonateSupply.serialize(writer)?;
                 ix.serialize(writer)
             }
+            AurataInstruction::BeginCapitalSweep(ix) => {
+                AurataInstructionTag::BeginCapitalSweep.serialize(writer)?;
+                ix.serialize(writer)
+            }
+            AurataInstruction::SettleCapitalSweep(ix) => {
+                AurataInstructionTag::SettleCapitalSweep.serialize(writer)?;
+                ix.serialize(writer)
+            }
         }
     }
 }
@@ -257,6 +273,46 @@ impl BorshDeserialize for AurataInstruction {
             AurataInstructionTag::DonateSupply => Ok(AurataInstruction::DonateSupply(
                 <_>::deserialize_reader(reader)?,
             )),
+            AurataInstructionTag::BeginCapitalSweep => Ok(AurataInstruction::BeginCapitalSweep(
+                <_>::deserialize_reader(reader)?,
+            )),
+            AurataInstructionTag::SettleCapitalSweep => Ok(AurataInstruction::SettleCapitalSweep(
+                <_>::deserialize_reader(reader)?,
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ixs::{BeginCapitalSweepInstruction, SettleCapitalSweepInstruction};
+
+    #[test]
+    fn capital_sweep_instruction_tags_are_appended_and_round_trip() {
+        assert_eq!(
+            AurataInstructionTag::try_from(20),
+            Ok(AurataInstructionTag::BeginCapitalSweep)
+        );
+        assert_eq!(
+            AurataInstructionTag::try_from(21),
+            Ok(AurataInstructionTag::SettleCapitalSweep)
+        );
+
+        let instructions = [
+            AurataInstruction::BeginCapitalSweep(BeginCapitalSweepInstruction {}),
+            AurataInstruction::SettleCapitalSweep(SettleCapitalSweepInstruction {
+                max_borrowed_atoms_to_repay: 123,
+                max_collateral_atoms_to_return: 456,
+            }),
+        ];
+        for (expected_tag, instruction) in [20u8, 21].into_iter().zip(instructions) {
+            let encoded = borsh::to_vec(&instruction).unwrap();
+            assert_eq!(encoded[0], expected_tag);
+            assert_eq!(
+                AurataInstruction::try_from_slice(&encoded).unwrap(),
+                instruction
+            );
         }
     }
 }

@@ -291,6 +291,45 @@ impl<T: AutaraReadClient> AutaraFullClientWithSigner<T> {
         Ok(events)
     }
 
+    pub async fn begin_capital_sweep(
+        &self,
+        market: &Pubkey,
+        borrow_position: &Pubkey,
+    ) -> Result<AutaraEvents, AutaraClientError> {
+        let tx = self
+            .tx_builder()
+            .begin_capital_sweep(market, borrow_position)
+            .await?;
+        let events = self
+            .tx_broadcast()
+            .broadcast_transaction(tx.sign(&[self.signer], self.network))
+            .await?;
+        Ok(events)
+    }
+
+    pub async fn settle_capital_sweep(
+        &self,
+        market: &Pubkey,
+        borrow_position: &Pubkey,
+        max_borrowed_atoms_to_repay: Option<u64>,
+        max_collateral_atoms_to_return: Option<u64>,
+    ) -> Result<AutaraEvents, AutaraClientError> {
+        let tx = self
+            .tx_builder()
+            .settle_capital_sweep(
+                market,
+                borrow_position,
+                max_borrowed_atoms_to_repay,
+                max_collateral_atoms_to_return,
+            )
+            .await?;
+        let events = self
+            .tx_broadcast()
+            .broadcast_transaction(tx.sign(&[self.signer], self.network))
+            .await?;
+        Ok(events)
+    }
+
     pub async fn reedeem_curator_fees(
         &self,
         market: &Pubkey,

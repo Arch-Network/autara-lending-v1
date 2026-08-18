@@ -15,10 +15,11 @@ clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
-itertools = { workspace = true }
 borsh = { workspace = true }
 reqwest = { workspace = true }
 apl-token = { workspace = true }
 
-orca_whirlpools = { path = "../../CLAMM/rust-sdk/whirlpool" }
-console-subscriber = "0.5"
+whirlpool-core = { path = "../../CLAMM/rust-sdk/core", features = ["floats"] }
+
+[dev-dependencies]
+axum = { workspace = true }
