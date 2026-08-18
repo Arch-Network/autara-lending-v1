@@ -347,6 +347,7 @@ dependencies = [
  "autara-lib",
  "axum",
  "borsh",
+ "bs58",
  "clap",
  "hex 0.4.3",
  "reqwest",

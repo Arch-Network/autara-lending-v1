@@ -123,11 +123,18 @@ fn default_minimum_expiry_headroom_ms() -> u64 {
 }
 
 pub fn parse_hex_pubkey(hex_str: &str) -> Result<Pubkey> {
-    let bytes = hex::decode(hex_str).context("invalid hex for pubkey")?;
-    let bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
-        anyhow::anyhow!("pubkey must be 32 bytes, got {}", bytes.len())
-    })?;
-    Ok(Pubkey::from(bytes))
+    let value = hex_str.trim();
+    if let Ok(bytes) = hex::decode(value) {
+        if let Ok(bytes) = <Vec<u8> as TryInto<[u8; 32]>>::try_into(bytes) {
+            return Ok(Pubkey::from(bytes));
+        }
+    }
+    if let Ok(bytes) = bs58::decode(value).into_vec() {
+        if let Ok(bytes) = <Vec<u8> as TryInto<[u8; 32]>>::try_into(bytes) {
+            return Ok(Pubkey::from(bytes));
+        }
+    }
+    Err(anyhow::anyhow!("invalid hex or base58 pubkey"))
 }
 
 /// Optional token filter that restricts which markets/tokens the liquidator considers.
@@ -235,6 +242,20 @@ mod tests {
         assert!(parse_hex_pubkey("00").is_err());
         assert!(parse_hex_pubkey(&"00".repeat(33)).is_err());
         assert!(parse_hex_pubkey(PROGRAM_ID).is_ok());
+    }
+
+    #[test]
+    fn pubkey_parser_accepts_propamm_base58_addresses() {
+        let parsed = parse_hex_pubkey("9EqAsENtgBA4Uo4wbS8LVdaQJjMKPpagMxgDVhxEWtKq").unwrap();
+
+        assert_eq!(
+            parsed.serialize(),
+            [
+                0x7a, 0x68, 0x83, 0x15, 0x01, 0xd3, 0xa9, 0x80, 0x6f, 0xef, 0xf1, 0x62, 0xe8, 0x28,
+                0x15, 0xa3, 0x6e, 0x17, 0x32, 0x96, 0x4a, 0x2e, 0xdd, 0x2b, 0x46, 0x1f, 0xaf, 0x69,
+                0x57, 0x5c, 0x36, 0x28,
+            ]
+        );
     }
 
     #[test]
