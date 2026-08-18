@@ -4,7 +4,7 @@ use std::{
 };
 
 use arch_sdk::arch_program::hash::Hash;
-use arch_sdk::ArchRpcClient;
+use arch_sdk::AsyncArchRpcClient;
 
 pub struct BlockhashCache {
     latest: Arc<RwLock<Hash>>,
@@ -14,7 +14,7 @@ pub struct BlockhashCache {
 impl BlockhashCache {
     /// defaults to 3s, min 1s
     pub async fn new(
-        arch_client: ArchRpcClient,
+        arch_client: AsyncArchRpcClient,
         interval: Option<Duration>,
     ) -> Result<Self, arch_sdk::ArchError> {
         let latest = Arc::new(RwLock::new(arch_client.get_best_block_hash().await?));

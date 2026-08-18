@@ -4,7 +4,7 @@ use arch_sdk::{
         instruction::Instruction,
         pubkey::Pubkey,
     },
-    ArchRpcClient,
+    AsyncArchRpcClient,
 };
 use autara_lib::{
     event::AutaraEvents,
@@ -24,7 +24,7 @@ use crate::client::{
 
 pub struct AutaraFullClientWithSigner<T: AutaraReadClient> {
     read_client: T,
-    arch_client: ArchRpcClient,
+    arch_client: AsyncArchRpcClient,
     network: Network,
     signer: Keypair,
     signer_pubkey: Pubkey,
@@ -32,7 +32,7 @@ pub struct AutaraFullClientWithSigner<T: AutaraReadClient> {
 
 impl AutaraFullClientWithSigner<AutaraReadClientImpl> {
     pub fn new_simple(
-        arch_client: ArchRpcClient,
+        arch_client: AsyncArchRpcClient,
         network: Network,
         autara_program_id: Pubkey,
         signer: Keypair,
@@ -65,7 +65,7 @@ impl AutaraFullClientWithSigner<AutaraReadClientImpl> {
 impl<T: AutaraReadClient> AutaraFullClientWithSigner<T> {
     pub fn new(
         read_client: T,
-        arch_client: ArchRpcClient,
+        arch_client: AsyncArchRpcClient,
         network: Network,
         signer: Keypair,
     ) -> Self {
@@ -89,7 +89,7 @@ impl<T: AutaraReadClient> AutaraFullClientWithSigner<T> {
         }
     }
 
-    pub fn rpc_client(&self) -> &ArchRpcClient {
+    pub fn rpc_client(&self) -> &AsyncArchRpcClient {
         &self.arch_client
     }
 
