@@ -8,6 +8,7 @@ use autara_lib::{
 
 use crate::{error::LendingProgramResult, ixs::DepositAplCollateralAccounts};
 
+#[inline(never)]
 pub fn process_deposit_apl_collateral(
     deposit_apl_collateral_accounts: &DepositAplCollateralAccounts,
     data: &DepositAplCollateralInstruction,

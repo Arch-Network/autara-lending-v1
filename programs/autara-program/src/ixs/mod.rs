@@ -8,6 +8,7 @@ pub mod create_supply_position;
 pub mod deposit_apl_collateral;
 pub mod donate_supply;
 pub mod liquidate;
+pub mod liquidator_whitelist;
 pub mod log;
 pub mod redeem_curator_fees;
 pub mod redeem_protocol_fees;
@@ -31,6 +32,9 @@ pub use create_supply_position::CreateSupplyPositionAccounts;
 pub use deposit_apl_collateral::DepositAplCollateralAccounts;
 pub use donate_supply::DonateSupplyAccounts;
 pub use liquidate::LiquidateAccounts;
+pub use liquidator_whitelist::{
+    AddWhitelistedLiquidatorAccounts, RemoveWhitelistedLiquidatorAccounts,
+};
 pub use log::LogAccounts;
 pub use repay_apl::RepayAplAccounts;
 pub use settle_capital_sweep::SettleCapitalSweepAccounts;

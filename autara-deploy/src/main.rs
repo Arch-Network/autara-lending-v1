@@ -11,7 +11,9 @@
 
 mod artifact;
 mod config;
-mod elf_upload;
+// Lives in the lib target (shared with autara-client's upgrade bins); re-exported
+// so the bin's own modules keep resolving it as `crate::elf_upload`.
+pub use autara_deploy::elf_upload;
 mod rpc;
 mod steps;
 mod verify;

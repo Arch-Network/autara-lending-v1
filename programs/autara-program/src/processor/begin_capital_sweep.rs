@@ -8,6 +8,7 @@ use autara_lib::{
 
 use crate::{error::LendingProgramResult, ixs::BeginCapitalSweepAccounts};
 
+#[inline(never)]
 pub fn process_begin_capital_sweep(
     sweep_accounts: &BeginCapitalSweepAccounts,
     _data: &BeginCapitalSweepInstruction,

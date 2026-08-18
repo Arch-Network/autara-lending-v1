@@ -18,14 +18,17 @@ RUN apt-get update && \
 COPY --from=builder /app/target/release/autara-server /usr/local/bin/autara-server
 COPY --from=builder /app/target/release/autara-pyth /usr/local/bin/autara-pyth
 COPY tokens.json /app/tokens.json
-COPY keys/ /app/keys/
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 WORKDIR /app
 EXPOSE 62776
 
-# ROLE selects the process (default "server" reproduces the previous testnet
-# CMD). ROLE=pusher runs the dedicated oracle pusher. Everything is env-driven so
-# the same image deploys to Arch mainnet and testnet, differing only by env.
+# Keys are NEVER baked into the image. entrypoint.sh decodes them at runtime from
+# base64 env vars (SIGNER_KEY_B64, PROGRAM_KEY_B64, ORACLE_KEY_B64,
+# TOKEN_AUTHORITY_KEY_B64, optional TOKENS_JSON_B64) into /app/keys/.
+#
+# ROLE selects the process (default "server"). ROLE=pusher runs the dedicated
+# oracle pusher. Everything is env-driven so the same image deploys to Arch
+# mainnet and testnet, differing only by env.
 ENTRYPOINT ["/app/entrypoint.sh"]

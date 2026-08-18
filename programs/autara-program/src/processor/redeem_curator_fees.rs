@@ -8,6 +8,7 @@ use autara_lib::{
 
 use crate::{error::LendingProgramResult, ixs::redeem_curator_fees::RedeemCuratorFeesAccounts};
 
+#[inline(never)]
 pub fn process_redeem_curator_fees(
     accounts: &RedeemCuratorFeesAccounts,
     account_infos: &[AccountInfo],

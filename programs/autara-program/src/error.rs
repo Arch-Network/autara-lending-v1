@@ -7,7 +7,8 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 pub type LendingProgramResult<T = ()> = Result<T, LendingProgramError>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{0}")]
 pub struct LendingProgramError(pub ErrorWithContext<LendingProgramErrorKind>);
 
 impl LendingProgramError {
@@ -32,11 +33,15 @@ pub fn format_pubkey_pair(label_a: &str, a: &Pubkey, label_b: &str, b: &Pubkey) 
     )
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LendingProgramErrorKind {
+    #[error("{0}")]
     ProgramError(ProgramError),
+    #[error("{0}")]
     AccountValidationError(AccountValidationError),
+    #[error("{0}")]
     LendingAccountValidationError(LendingAccountValidationError),
+    #[error("{0}")]
     LendingError(LendingError),
 }
 
@@ -71,15 +76,27 @@ impl LendingProgramErrorKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive, thiserror::Error)]
 #[repr(u8)]
 pub enum LendingAccountValidationError {
+    #[error("Invalid authority for this position")]
     InvalidAuthority,
+    #[error("Invalid market authority")]
     InvalidMarketAuthority,
+    #[error("Invalid market account")]
     InvalidMarket,
+    #[error("Invalid market vault account")]
     InvalidMarketVault,
+    #[error("Token account mint does not match the expected mint")]
     InvalidMintForTokenAccount,
+    #[error("Invalid protocol authority")]
     InvalidProtocolAuthority,
+    #[error("Invalid liquidator whitelist entry")]
+    InvalidLiquidatorWhitelistEntry,
+    #[error("Missing liquidator whitelist entry")]
+    MissingLiquidatorWhitelistEntry,
+    #[error("Liquidator is not whitelisted")]
+    LiquidatorNotWhitelisted,
 }
 
 pub const ACCOUNT_VALIDATION_ERROR_OFFSET: u32 = 6000;
@@ -90,7 +107,7 @@ impl Into<ProgramError> for LendingProgramError {
     fn into(self) -> ProgramError {
         #[cfg(feature = "entrypoint")]
         {
-            arch_program::msg!("{:?}", self);
+            arch_program::msg!("{}", self);
         }
         match self.0.error {
             LendingProgramErrorKind::ProgramError(err) => err,
@@ -134,6 +151,7 @@ impl From<LendingAccountValidationError> for LendingProgramErrorKind {
 impl<T> From<ErrorWithContext<T>> for LendingProgramError
 where
     LendingProgramErrorKind: From<T>,
+    T: std::fmt::Display,
 {
     fn from(err: ErrorWithContext<T>) -> Self {
         LendingProgramError(ErrorWithContext {
@@ -226,5 +244,41 @@ pub mod tests {
             let converted_error = LendingProgramErrorKind::from_error_code(code as u32);
             assert_eq!(error, converted_error);
         }
+    }
+
+    #[test]
+    fn program_error_kinds_display_user_readable_messages() {
+        assert_eq!(
+            LendingProgramErrorKind::LendingError(LendingError::MaxLtvReached).to_string(),
+            "Borrow would exceed the market max loan-to-value (LTV)"
+        );
+        assert_eq!(
+            LendingAccountValidationError::InvalidMintForTokenAccount.to_string(),
+            "Token account mint does not match the expected mint"
+        );
+        assert_eq!(
+            AccountValidationError::NotSigner.to_string(),
+            "Account is not a signer"
+        );
+    }
+
+    #[test]
+    fn liquidator_whitelist_validation_error_discriminants_are_appended() {
+        assert_eq!(
+            u8::from(LendingAccountValidationError::InvalidProtocolAuthority),
+            5
+        );
+        assert_eq!(
+            u8::from(LendingAccountValidationError::InvalidLiquidatorWhitelistEntry),
+            6
+        );
+        assert_eq!(
+            u8::from(LendingAccountValidationError::MissingLiquidatorWhitelistEntry),
+            7
+        );
+        assert_eq!(
+            u8::from(LendingAccountValidationError::LiquidatorNotWhitelisted),
+            8
+        );
     }
 }

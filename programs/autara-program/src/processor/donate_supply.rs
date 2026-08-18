@@ -8,6 +8,7 @@ use autara_lib::{
 
 use crate::{error::LendingProgramResult, ixs::DonateSupplyAccounts};
 
+#[inline(never)]
 pub fn process_donate_supply(
     donate_supply_accounts: &DonateSupplyAccounts,
     data: &DonateSupplyInstruction,

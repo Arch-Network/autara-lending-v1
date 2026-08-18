@@ -8,6 +8,7 @@ use autara_lib::{
 
 use crate::{error::LendingProgramResult, ixs::RepayAplAccounts};
 
+#[inline(never)]
 pub fn process_repay_apl(
     repay_apl_accounts: &RepayAplAccounts,
     data: &RepayAplInstruction,

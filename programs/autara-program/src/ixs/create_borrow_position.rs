@@ -17,6 +17,7 @@ pub struct CreateBorrowPositionAccounts<'a, 'b> {
 }
 
 impl<'a, 'b> CreateBorrowPositionAccounts<'a, 'b> {
+    #[inline(never)]
     pub fn from_accounts(
         accounts: &mut impl Iterator<Item = &'b AccountInfo<'a>>,
     ) -> LendingProgramResult<Self>

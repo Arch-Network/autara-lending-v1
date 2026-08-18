@@ -1,3 +1,4 @@
+pub mod add_whitelisted_liquidator;
 pub mod begin_capital_sweep;
 pub mod borrow_apl;
 pub mod borrow_deposit_apl;
@@ -7,9 +8,11 @@ pub mod create_market;
 pub mod create_supply_position;
 pub mod deposit_apl_collateral;
 pub mod donate_supply;
+pub mod idl;
 pub mod liquidate;
 pub mod redeem_curator_fees;
 pub mod redeem_protocol_fees;
+pub mod remove_whitelisted_liquidator;
 pub mod repay_apl;
 pub mod settle_capital_sweep;
 pub mod socialize_loss;

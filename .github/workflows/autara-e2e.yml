@@ -9,13 +9,13 @@
 # nightly schedule and on manual dispatch.
 #
 # Self-contained: it starts its OWN Pyth price pusher (autara-pyth) feeding the
-# oracle program, otherwise borrow/repay would fail with OracleRateTooOld. The
-# pusher auto-generates and faucets its own signer (no secret needed).
+# oracle program, otherwise borrow/repay would fail with OracleRateTooOld.
+# The pusher must sign as the feed authority (AUTARA_ORACLE_SIGNER_KEY_B64).
 #
-# Required repo secrets (base64 of the real testnet mint-authority key files):
-#   AUTARA_E2E_AUSD_AUTHORITY_B64
-#   AUTARA_E2E_ABTC_AUTHORITY_B64
-# See the PR description for the exact `gh secret set` commands.
+# Required repo secrets:
+#   AUTARA_ORACLE_SIGNER_KEY_B64 — feed authority for the live oracle
+#   AUTARA_E2E_AUSD_AUTHORITY_B64 / AUTARA_E2E_ABTC_AUTHORITY_B64 — mint path
+#     (or use AUTARA_E2E_TESTNET_USER_KEY_B64 with E2E_SKIP_MINT via readiness)
 
 name: autara-e2e
 
@@ -35,12 +35,15 @@ jobs:
       # ---- testnet targets (mirror the example defaults) ----
       E2E_RPC: https://rpc.testnet.arch.network
       E2E_NETWORK: testnet4
-      E2E_PROGRAM_ID: 34cf72a92dd76322a42f13f99e51cf7c03221f4adbd4ee7e0c409c4161dfe20c
-      E2E_MARKET: d8d679b946aafb22322f477cd5f196700f181aa3f712ca09e486fc77cedc0cce
-      E2E_AUSD_MINT: 8ec480c6e5458e7d37dc2a9f7d7d149a02d8182a38523b037905203ff36b71f6
-      E2E_ABTC_MINT: 627ecd24366c89314b12aa08a1b2fffc3890cb9cf64fb04fe3e95c7182b23dfb
+      # aUSD/aBTC market on the rotated-key testnet deploy (2026-08-14/15).
+      # Source of truth: deployments/testnet.json (do not reuse compromised
+      # 53def2dc… / eee682c2… ids).
+      E2E_PROGRAM_ID: 2aa41c8f71f0ede3f374c15ea1ca6096c3f1c15a10da6530c0ecfa48ba109513
+      E2E_MARKET: e66015deca68f6357b4ebfd7195a7808617082ad310b9c2b7f3db3ab3ca1a5b9
+      E2E_AUSD_MINT: 55c6cee38a31732e2dad821ab1c38f902a7c51efaefb3641d51f3485c4617a45
+      E2E_ABTC_MINT: 1d46e0dd87393236e4e01252439f46dcbaec7c2255d1fd734e61771a00e8f4e9
       # ---- oracle pusher targets ----
-      ORACLE_PROGRAM_ID: 8d24068aa026fd2e6ccca6e7b64a944b0e384df279b15f599ddd4a5285d592e8
+      ORACLE_PROGRAM_ID: 180ec4dd6eb8d7f2435d4d89c5d166c8e6a3fed3c33f58de25be8e64e94a99dd
       ORACLE_FEEDS: 0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a
     steps:
       - uses: actions/checkout@v4
@@ -53,33 +56,58 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # Decode the two mint-authority key secrets to 0600 files. These are real
-      # testnet APL mint authorities (64-hex secret), used to mint aUSD/aBTC to
-      # the throwaway test user. The pusher needs no secret.
-      - name: Decode mint-authority keys
+      # Decode mint-authority keys, or fall back to a pre-funded user
+      # (E2E_SKIP_MINT=1) when mint authorities are unavailable.
+      - name: Decode mint-authority / pre-funded user keys
         env:
           AUSD_B64: ${{ secrets.AUTARA_E2E_AUSD_AUTHORITY_B64 }}
           ABTC_B64: ${{ secrets.AUTARA_E2E_ABTC_AUTHORITY_B64 }}
+          USER_B64: ${{ secrets.AUTARA_E2E_TESTNET_USER_KEY_B64 }}
         run: |
           set -euo pipefail
           umask 077
           KEYS="$RUNNER_TEMP/keys"
           mkdir -p "$KEYS"
-          if [ -z "${AUSD_B64:-}" ] || [ -z "${ABTC_B64:-}" ]; then
-            echo "::error::Missing AUTARA_E2E_AUSD_AUTHORITY_B64 / AUTARA_E2E_ABTC_AUTHORITY_B64 repo secrets." >&2
+          if [ -n "${USER_B64:-}" ]; then
+            printf '%s' "$USER_B64" | base64 -d > "$KEYS/testnet-user.key"
+            chmod 600 "$KEYS/testnet-user.key"
+            {
+              echo "E2E_USER_KEY=$KEYS/testnet-user.key"
+              echo "E2E_SKIP_MINT=1"
+            } >> "$GITHUB_ENV"
+            echo "Using pre-funded testnet user (E2E_SKIP_MINT=1)."
+          elif [ -n "${AUSD_B64:-}" ] && [ -n "${ABTC_B64:-}" ]; then
+            printf '%s' "$AUSD_B64" | base64 -d > "$KEYS/aUSD-authority.json"
+            printf '%s' "$ABTC_B64" | base64 -d > "$KEYS/aBTC-authority.json"
+            chmod 600 "$KEYS/aUSD-authority.json" "$KEYS/aBTC-authority.json"
+            {
+              echo "E2E_AUSD_AUTHORITY=$KEYS/aUSD-authority.json"
+              echo "E2E_ABTC_AUTHORITY=$KEYS/aBTC-authority.json"
+            } >> "$GITHUB_ENV"
+          else
+            echo "::error::Need AUTARA_E2E_TESTNET_USER_KEY_B64 or both AUTARA_E2E_*_AUTHORITY_B64 secrets." >&2
             exit 1
           fi
-          printf '%s' "$AUSD_B64" | base64 -d > "$KEYS/aUSD-authority.json"
-          printf '%s' "$ABTC_B64" | base64 -d > "$KEYS/aBTC-authority.json"
-          chmod 600 "$KEYS/aUSD-authority.json" "$KEYS/aBTC-authority.json"
-          {
-            echo "E2E_AUSD_AUTHORITY=$KEYS/aUSD-authority.json"
-            echo "E2E_ABTC_AUTHORITY=$KEYS/aBTC-authority.json"
-          } >> "$GITHUB_ENV"
 
-      # Fresh throwaway user key (64-hex secret) created + faucet-funded by the
-      # example at runtime.
+      - name: Decode oracle feed-authority signer
+        env:
+          ORACLE_SIGNER_B64: ${{ secrets.AUTARA_ORACLE_SIGNER_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          KEYS="$RUNNER_TEMP/keys"
+          mkdir -p "$KEYS"
+          if [ -z "${ORACLE_SIGNER_B64:-}" ]; then
+            echo "::error::Missing AUTARA_ORACLE_SIGNER_KEY_B64 (feed authority)." >&2
+            exit 1
+          fi
+          printf '%s' "$ORACLE_SIGNER_B64" | base64 -d > "$KEYS/oracle-signer.key"
+          chmod 600 "$KEYS/oracle-signer.key"
+          echo "ORACLE_SIGNER_KEY=$KEYS/oracle-signer.key" >> "$GITHUB_ENV"
+
+      # Fresh throwaway user key only when not using the pre-funded path.
       - name: Generate test user key
+        if: ${{ env.E2E_SKIP_MINT != '1' }}
         run: |
           set -euo pipefail
           umask 077
@@ -93,8 +121,16 @@ jobs:
           cargo build --release -p autara-pyth
           cargo build -p autara-client --example e2e_flow
 
-      # Start the Pyth pusher in the background and wait until it confirms it is
-      # actually pushing (log line "Sending ...") before running the flow.
+      - name: Top up e2e user gas (pre-funded path)
+        if: ${{ env.E2E_SKIP_MINT == '1' }}
+        run: |
+          set -euo pipefail
+          cargo run -p autara-client --example fund_signer -- \
+            --key "$E2E_USER_KEY" \
+            --rpc "$E2E_RPC" \
+            --network testnet
+
+      # Start the Pyth pusher with the feed authority; wait for a successful push.
       - name: Start Pyth pusher
         run: |
           set -euo pipefail
@@ -106,6 +142,7 @@ jobs:
             --network testnet \
             --program-id "$ORACLE_PROGRAM_ID" \
             --feeds "$ORACLE_FEEDS" \
+            --signer "$ORACLE_SIGNER_KEY" \
             > "$LOG" 2>&1 &
           PUSHER_PID=$!
           echo "PUSHER_PID=$PUSHER_PID" >> "$GITHUB_ENV"
@@ -116,14 +153,18 @@ jobs:
               cat "$LOG" >&2
               exit 1
             fi
-            if grep -q "Sending" "$LOG"; then
-              echo "Pusher is pushing prices (after ${i}s):"
-              grep -m1 "Sending" "$LOG"
+            if grep -q "Incorrect authority provided" "$LOG"; then
+              echo "::error::Pusher is not the feed authority. Check AUTARA_ORACLE_SIGNER_KEY_B64." >&2
+              cat "$LOG" >&2
+              exit 1
+            fi
+            if grep -q "Sending" "$LOG" && ! grep -q "Transaction failed" "$LOG"; then
+              echo "Pusher is pushing prices (after ${i}s)"
               exit 0
             fi
             sleep 1
           done
-          echo "::error::Pusher never logged a 'Sending' (price push) within 60s. Log:" >&2
+          echo "::error::Pusher never logged a successful 'Sending' within 60s. Log:" >&2
           cat "$LOG" >&2
           exit 1
 

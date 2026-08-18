@@ -63,8 +63,11 @@ checks against a **compiled-in id** (`autara_program::id()` =
 from the deployed program key. So the deployed program key's pubkey **must
 equal** `autara_program::id()`.
 
-- `keys/autara-stage.key`'s pubkey already equals `autara_program::id()`, so the
-  default testnet env is consistent — no sync step is required.
+- The live testnet program key's pubkey equals `autara_program::id()`
+  (synced to the 2026-08-14 redeploy key under `.keys-testnet/`; see
+  `docs/testnet-deployment.md`). Fresh keys under
+  `autara-deploy/.keys-testnet/` must match `id()` after
+  `sync-program-id.sh` + rebuild.
 - If you deploy with a different key, the tool warns (fatal on a real run). To
   use a new key you must update `id()` in `programs/autara-program/src/lib.rs`
   and rebuild the ELF.
@@ -75,10 +78,12 @@ The `autara-oracle` program is position-independent (it uses the runtime
 ## Secret hygiene
 
 - Env files contain **paths only**, never key material.
-- New key directories matching `autara-deploy/.keys-*/` are gitignored. Keep
-  rotated/fresh testnet keys in `autara-deploy/.keys-testnet/`.
-- The committed `autara.testnet.env` references the existing repo `keys/` so the
-  dry-run works immediately; rotate to `.keys-testnet/` for production.
+- `keys/` and `*.key` are gitignored; never commit keypairs.
+- Keep rotated/fresh testnet keys in `autara-deploy/.keys-testnet/` (also
+  gitignored via `.keys-*/`).
+- `autara.testnet.env` points at `.keys-testnet/`. Testnet on-chain program
+  redeploy completed 2026-08-14; default `TOKENS`/`MARKET_PAIRS` are aUSD/aBTC
+  (Arch APL mints) as of 2026-08-15 (see `docs/testnet-deployment.md`).
 
 ## Per-network differences
 
@@ -168,12 +173,25 @@ Follow these steps in order. Steps 1–6 are operational prerequisites that
    printed addresses, the resolved `market_params:`, the program-id guard
    (`program_id_guard: ok`), and the `mainnet_guard: ok` line. A dry-run sends
    **nothing** and skips the gates' teeth.
-8. **Real run, in order.** Only after the dry-runs look correct, re-dispatch with
+8. **Pre-upgrade readiness (recommended).** Before any upgrade, run
+   `autara-readiness` (or locally `./scripts/readiness.sh testnet|mainnet-safe`).
+   Prefer the chained **`autara-release`** workflow: readiness → program+oracle
+   upgrade dry-run → optional real upgrade. For mainnet, set
+   `readiness_mode=mainnet-safe` (pre-funded user; `E2E_SKIP_MINT=1`) and only
+   set `run_real_upgrade=true` after reviewing artifacts; real mainnet still
+   requires `mainnet_confirm=DEPLOY MAINNET`.
+9. **Real run, in order.** Only after the dry-runs look correct, re-dispatch with
    `dry_run=false` **and** `mainnet_confirm=DEPLOY MAINNET`, approving the
    Environment review when prompted. Order: `autara-deploy` (program + oracle) →
    `autara-initialize` (global config) → `autara-setup-markets` (token setup +
-   markets). Use `autara-upgrade` for in-place program upgrades (program id /
-   `autara_program::id()` unchanged).
+   markets). Or run the chained **`autara-deploy-testnet`** workflow (same three
+   actions in order; `dry_run` defaults to true). Use `autara-upgrade` /
+   `autara-release` for in-place **program + oracle** upgrades (ids unchanged).
+   Real deploy/upgrade jobs also **publish the on-chain IDL** in the same run
+   (immediately after the ELF is live — see `idl/README.md`). Dry-runs only
+   print the derived IDL account. Publish / redeploy the oracle pusher with
+   **`autara-deploy-pusher`** (GHCR always; Railway when `RAILWAY_*` Environment
+   secrets are set — see `docs/oracle-pusher.md`).
 
 > **Upgrade-authority custody.** The deployer key is the program upgrade
 > authority (it signs the on-chain re-upload for `autara-upgrade`). Guard it like

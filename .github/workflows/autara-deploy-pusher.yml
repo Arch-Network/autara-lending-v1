@@ -1,0 +1,219 @@
+# Autara — build/push the oracle pusher image (GHCR) and optionally redeploy Railway.
+#
+# Always:
+#   1. Build the repo Dockerfile (ROLE=pusher / ROLE=server image)
+#   2. Push to ghcr.io/<owner>/<repo>/autara:<network>-<sha> and :<network>-latest
+#
+# If Railway secrets exist on the target GitHub Environment:
+#   RAILWAY_TOKEN              — Railway API token
+#   RAILWAY_SERVICE_ID         — pusher service id for this network
+#   RAILWAY_ENVIRONMENT_ID     — optional; Railway environment id/name
+# then the workflow syncs pusher env (ROLE/NETWORK/RPC/ORACLE/FEEDS, and
+# SIGNER_KEY_B64 when the GitHub secret is present) and triggers a redeploy.
+#
+# If Railway secrets are missing: the image is still published; the job summary
+# prints the next steps to point Railway at the GHCR tag.
+#
+# See docs/oracle-pusher.md for required Railway secrets and env.
+
+name: autara-deploy-pusher
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target network'
+        type: choice
+        required: true
+        options:
+          - testnet
+          - mainnet
+        default: testnet
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: autara-pusher-${{ github.event.inputs.network }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.network }}
+    env:
+      NETWORK: ${{ inputs.network }}
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+      image_latest: ${{ steps.meta.outputs.latest }}
+      image_name: ${{ steps.meta.outputs.image_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tags
+        id: meta
+        run: |
+          set -euo pipefail
+          # GHCR requires the full repository path to be lowercase.
+          repo_lc="$(printf '%s' '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          image_name="ghcr.io/${repo_lc}/autara"
+          sha_short="$(printf '%s' "${GITHUB_SHA}" | cut -c1-12)"
+          tag="${NETWORK}-${sha_short}"
+          latest="${NETWORK}-latest"
+          echo "image_name=${image_name}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_NAME=${image_name}" >> "$GITHUB_ENV"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "latest=${latest}" >> "$GITHUB_OUTPUT"
+          echo "Image tags: ${image_name}:${tag} and :${latest}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.latest }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Write publish summary
+        run: |
+          set -euo pipefail
+          {
+            echo "## Autara pusher image published"
+            echo ""
+            echo "- network: \`${NETWORK}\`"
+            echo "- image: \`${IMAGE_NAME}:${{ steps.meta.outputs.tag }}\`"
+            echo "- latest: \`${IMAGE_NAME}:${{ steps.meta.outputs.latest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  railway:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.network }}
+    env:
+      NETWORK: ${{ inputs.network }}
+      IMAGE_NAME: ${{ needs.publish.outputs.image_name }}
+      IMAGE_TAG: ${{ needs.publish.outputs.image_tag }}
+      IMAGE_LATEST: ${{ needs.publish.outputs.image_latest }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
+      RAILWAY_ENVIRONMENT_ID: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
+      SIGNER_KEY_B64: ${{ secrets.SIGNER_KEY_B64 }}
+      VAR_ORACLE_PROGRAM_ID: ${{ vars.ORACLE_PROGRAM_ID }}
+      VAR_ORACLE_FEEDS: ${{ vars.ORACLE_FEEDS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load committed pusher defaults
+        run: |
+          set -euo pipefail
+          ENV_FILE="autara-deploy/scripts/autara.pusher.${NETWORK}.env"
+          if [ ! -f "$ENV_FILE" ]; then
+            echo "::error::Missing $ENV_FILE" >&2
+            exit 1
+          fi
+          ROLE=pusher
+          ARCH_RPC_URL=""
+          ORACLE_PROGRAM_ID=""
+          FEEDS=""
+          while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+              ''|\#*) continue ;;
+              ROLE=*) ROLE="${line#ROLE=}" ;;
+              ARCH_RPC_URL=*) ARCH_RPC_URL="${line#ARCH_RPC_URL=}" ;;
+              ORACLE_PROGRAM_ID=*) ORACLE_PROGRAM_ID="${line#ORACLE_PROGRAM_ID=}" ;;
+              FEEDS=*) FEEDS="${line#FEEDS=}" ;;
+            esac
+          done < "$ENV_FILE"
+          if [ -n "${VAR_ORACLE_PROGRAM_ID:-}" ]; then
+            ORACLE_PROGRAM_ID="$VAR_ORACLE_PROGRAM_ID"
+          fi
+          if [ -n "${VAR_ORACLE_FEEDS:-}" ]; then
+            FEEDS="$VAR_ORACLE_FEEDS"
+          fi
+          if [ -z "$ARCH_RPC_URL" ] || [ -z "$ORACLE_PROGRAM_ID" ] || [ -z "$FEEDS" ]; then
+            echo "::error::Incomplete pusher defaults from $ENV_FILE / GitHub vars." >&2
+            exit 1
+          fi
+          {
+            echo "ROLE=$ROLE"
+            echo "ARCH_RPC_URL=$ARCH_RPC_URL"
+            echo "ORACLE_PROGRAM_ID=$ORACLE_PROGRAM_ID"
+            echo "FEEDS=$FEEDS"
+          } >> "$GITHUB_ENV"
+          echo "Loaded pusher defaults (ORACLE_PROGRAM_ID=${ORACLE_PROGRAM_ID})"
+
+      - name: Railway redeploy (optional)
+        run: |
+          set -euo pipefail
+          if [ -z "${RAILWAY_TOKEN:-}" ] || [ -z "${RAILWAY_SERVICE_ID:-}" ]; then
+            echo "Railway secrets missing — skipping redeploy."
+            {
+              echo "## Railway next steps"
+              echo ""
+              echo "Image published but Railway was **not** updated (missing \`RAILWAY_TOKEN\` and/or \`RAILWAY_SERVICE_ID\` on the \`${NETWORK}\` Environment)."
+              echo ""
+              echo "1. Create a Railway service that pulls:"
+              echo "   - \`${IMAGE_NAME}:${IMAGE_LATEST}\`"
+              echo "2. Set Environment secrets on GitHub \`${NETWORK}\`:"
+              echo "   - \`RAILWAY_TOKEN\`"
+              echo "   - \`RAILWAY_SERVICE_ID\`"
+              echo "   - \`RAILWAY_ENVIRONMENT_ID\` (optional)"
+              echo "3. On Railway, set env from \`autara-deploy/scripts/autara.pusher.${NETWORK}.env\` plus \`SIGNER_KEY_B64\`."
+              echo "4. Re-run **autara-deploy-pusher** to redeploy automatically."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          curl -fsSL https://railway.com/install.sh | sh
+          export PATH="$HOME/.railway/bin:$PATH"
+          railway --version
+
+          svc_args=(--service "$RAILWAY_SERVICE_ID")
+          if [ -n "${RAILWAY_ENVIRONMENT_ID:-}" ]; then
+            svc_args+=(--environment "$RAILWAY_ENVIRONMENT_ID")
+          fi
+
+          # Sync non-secret runtime env. Avoid `set -x` so values stay out of logs.
+          railway variables set \
+            "ROLE=${ROLE}" \
+            "NETWORK=${NETWORK}" \
+            "ARCH_RPC_URL=${ARCH_RPC_URL}" \
+            "ORACLE_PROGRAM_ID=${ORACLE_PROGRAM_ID}" \
+            "FEEDS=${FEEDS}" \
+            "${svc_args[@]}" \
+            --skip-deploys
+
+          if [ -n "${SIGNER_KEY_B64:-}" ]; then
+            railway variables set \
+              "SIGNER_KEY_B64=${SIGNER_KEY_B64}" \
+              "${svc_args[@]}" \
+              --skip-deploys
+            echo "Synced SIGNER_KEY_B64 to Railway (value not printed)."
+          else
+            echo "SIGNER_KEY_B64 not set on GitHub Environment — leaving Railway value unchanged."
+          fi
+
+          railway redeploy "${svc_args[@]}" --yes
+
+          {
+            echo "## Railway redeploy triggered"
+            echo ""
+            echo "- network: \`${NETWORK}\`"
+            echo "- service: \`${RAILWAY_SERVICE_ID}\`"
+            echo "- image (for Docker-source services): \`${IMAGE_NAME}:${IMAGE_LATEST}\`"
+            echo "- ORACLE_PROGRAM_ID: \`${ORACLE_PROGRAM_ID}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

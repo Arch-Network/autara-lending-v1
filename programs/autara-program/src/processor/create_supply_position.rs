@@ -13,6 +13,7 @@ use crate::{
     state::AutaraUninitializedAccount,
 };
 
+#[inline(never)]
 pub fn process_create_supply_position(
     create_supply_position_accounts: &CreateSupplyPositionAccounts,
     data: &CreateSupplyPositionInstruction,

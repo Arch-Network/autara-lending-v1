@@ -3,17 +3,22 @@ use autara_lib::ixs::UpdateConfigInstruction;
 
 use crate::{error::LendingProgramResult, ixs::UpdateConfigAccounts};
 
+#[inline(never)]
 pub fn process_update_config(
     accounts: &UpdateConfigAccounts,
     data: &UpdateConfigInstruction,
     clock: &Clock,
 ) -> LendingProgramResult {
     let mut market_ref = accounts.market.load_mut();
+    // Accrue interest under the current parameters first: sync_clock applies the fee
+    // that is set at the time it runs to the whole elapsed window, so changing the fee
+    // before syncing would apply the new fee retroactively to already-accrued interest.
+    market_ref.sync_clock(clock.unix_timestamp)?;
     if let Some(supply_oracle_config) = &data.supply_oracle_config {
-        market_ref.set_supply_oracle_config(*supply_oracle_config);
+        market_ref.set_supply_oracle_config(*supply_oracle_config)?;
     }
     if let Some(collateral_oracle_config) = &data.collateral_oracle_config {
-        market_ref.set_collateral_oracle_config(*collateral_oracle_config);
+        market_ref.set_collateral_oracle_config(*collateral_oracle_config)?;
     }
     if let Some(ltv_config) = &data.ltv_config {
         market_ref.config_mut().update_ltv(ltv_config)?;

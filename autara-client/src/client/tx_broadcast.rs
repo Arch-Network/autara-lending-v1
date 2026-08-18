@@ -67,7 +67,7 @@ pub fn parse_processed_autara_tx(
 
 #[derive(Debug, thiserror::Error)]
 pub enum AutaraClientError {
-    #[error("Autara transaction error: {kind:?}, logs = {logs:?}")]
+    #[error("Autara transaction error: {kind}, logs = {logs:?}")]
     AutaraTxError {
         kind: autara_program::error::LendingProgramErrorKind,
         logs: Vec<String>,

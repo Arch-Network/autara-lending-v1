@@ -33,6 +33,7 @@ pub fn liquidate_ix(
     collateral_oracle: Pubkey,
     max_borrowed_atoms_to_repay: u64,
     min_collateral_atoms_to_receive: u64,
+    liquidator_whitelist_entry: Option<Pubkey>,
     ix_callback: Option<Instruction>,
 ) -> Instruction {
     let mut accounts = vec![
@@ -46,8 +47,11 @@ pub fn liquidate_ix(
         AccountMeta::new_readonly(apl_token::id(), false),
         AccountMeta::new_readonly(supply_oracle, false),
         AccountMeta::new_readonly(collateral_oracle, false),
-        AccountMeta::new_readonly(autara_program_id, false),
     ];
+    if let Some(entry) = liquidator_whitelist_entry {
+        accounts.push(AccountMeta::new_readonly(entry, false));
+    }
+    accounts.push(AccountMeta::new_readonly(autara_program_id, false));
     if let Some(callback) = &ix_callback {
         accounts.push(AccountMeta::new_readonly(callback.program_id, false));
         accounts.extend(callback.accounts.iter().cloned());
@@ -205,6 +209,90 @@ pub fn settle_capital_sweep_ix(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn liquidate_builder_places_whitelist_proof_before_program_and_callback() {
+        let program = Pubkey::new_unique();
+        let callback_program = Pubkey::new_unique();
+        let whitelist_entry = Pubkey::new_unique();
+        let callback = Instruction {
+            program_id: callback_program,
+            accounts: vec![],
+            data: vec![],
+        };
+
+        let restricted = liquidate_ix(
+            program,
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            u64::MAX,
+            0,
+            Some(whitelist_entry),
+            Some(callback),
+        );
+        assert_eq!(restricted.accounts[10].pubkey, whitelist_entry);
+        assert_eq!(restricted.accounts[11].pubkey, program);
+        assert_eq!(restricted.accounts[12].pubkey, callback_program);
+
+        let permissionless = liquidate_ix(
+            program,
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            u64::MAX,
+            0,
+            None,
+            None,
+        );
+        assert_eq!(permissionless.accounts[10].pubkey, program);
+    }
+
+    #[test]
+    fn liquidator_whitelist_builders_use_expected_pda_and_accounts() {
+        let program = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+        let curator = Pubkey::new_unique();
+        let liquidator = Pubkey::new_unique();
+
+        let (entry, add) =
+            crate::ixs::add_whitelisted_liquidator_ix(program, market, curator, liquidator);
+        assert_eq!(
+            entry,
+            crate::pda::find_liquidator_whitelist_entry_pda(&program, &market, &liquidator).0
+        );
+        assert_eq!(add.accounts[0].pubkey, market);
+        assert_eq!(add.accounts[1].pubkey, curator);
+        assert!(add.accounts[1].is_signer);
+        assert!(add.accounts[1].is_writable);
+        assert_eq!(add.accounts[2].pubkey, entry);
+        assert_eq!(
+            add.accounts[3].pubkey,
+            arch_program::system_program::SYSTEM_PROGRAM_ID
+        );
+        assert_eq!(add.accounts[4].pubkey, program);
+
+        let (removed_entry, remove) =
+            crate::ixs::remove_whitelisted_liquidator_ix(program, market, curator, liquidator);
+        assert_eq!(removed_entry, entry);
+        assert_eq!(remove.accounts[0].pubkey, market);
+        assert_eq!(remove.accounts[1].pubkey, curator);
+        assert!(remove.accounts[1].is_signer);
+        assert_eq!(remove.accounts[2].pubkey, entry);
+        assert_eq!(remove.accounts[3].pubkey, program);
+    }
 
     #[test]
     fn capital_sweep_builders_encode_expected_accounts_and_data() {
