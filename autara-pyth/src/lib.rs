@@ -1,4 +1,5 @@
-// Testnet price pusher: fetches Pyth prices or falls back to DIA if hermes is down, and writes oracle accounts.
+// Price pusher: fetches Pyth (Hermes) and writes oracle accounts.
+// DIA REST is a testnet/localnet liveness fallback only — mainnet fails closed.
 
 mod explorer;
 mod metrics;
@@ -29,6 +30,12 @@ const DIA_FALLBACK_EXPO: i32 = -8;
 pub const DEFAULT_PUSH_INTERVAL_SECS: u64 = 5;
 /// Below this balance on testnet/localnet, request a faucet airdrop before pushing.
 const TESTNET_REFILL_THRESHOLD_LAMPORTS: u64 = 100_000;
+
+/// DIA quotes are a testnet liveness fallback (synthetic 1% confidence).
+/// Mainnet must not push them as Pyth on a Hermes outage.
+fn dia_fallback_allowed(network: Network) -> bool {
+    network != Network::Bitcoin
+}
 
 /// Push-loop interval: the `PUSH_INTERVAL_SECS` env var if set (and a valid
 /// u64), otherwise the default 5s that has always been used.
@@ -118,6 +125,10 @@ async fn push_once(
         Ok(ok) => ok,
         Err(err) => {
             tracing::error!("Failed to fetch Pyth price: {}", err);
+            if !dia_fallback_allowed(bitcoin_network) {
+                tracing::error!("DIA fallback disabled on mainnet; failing closed");
+                return PushOutcome::FetchFailure;
+            }
             tracing::warn!("Falling back to DIA REST oracle prices");
             match fetch_dia_prices(feeds).await {
                 Ok(ok) => ok,
@@ -471,4 +482,17 @@ where
 {
     let s = String::deserialize(deserializer)?;
     s.parse().map_err(serde::de::Error::custom)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dia_fallback_is_testnet_only() {
+        assert!(!dia_fallback_allowed(Network::Bitcoin));
+        assert!(dia_fallback_allowed(Network::Testnet));
+        assert!(dia_fallback_allowed(Network::Testnet4));
+        assert!(dia_fallback_allowed(Network::Regtest));
+    }
 }
