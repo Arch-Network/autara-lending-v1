@@ -149,6 +149,8 @@ pub enum LendingError {
     LiquidatorNotWhitelisted,
     #[error("Oracle account address does not match the feed's canonical account")]
     InvalidOracleFeedAccount,
+    #[error("No liquidation reducing the position loan-to-value (LTV) fits in the repay cap")]
+    LiquidationCannotReduceLtv,
 }
 
 impl LendingError {

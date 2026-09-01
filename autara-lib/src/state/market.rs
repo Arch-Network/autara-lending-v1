@@ -125,6 +125,10 @@ impl Market {
             .track_caller()?;
         let ltv = if borrow_value.is_zero() {
             IFixedPoint::zero()
+        } else if collateral_value.is_zero() {
+            // debt left with no collateral backing it: the ltv is infinite, and dividing
+            // would only report it as an opaque `DivisionOverflow`
+            IFixedPoint::MAX
         } else {
             borrow_value.safe_div(collateral_value).track_caller()?
         };
@@ -2489,6 +2493,133 @@ pub mod tests {
             )
             .unwrap();
         assert_eq!(market.collateral_vault().total_collateral_atoms(), BTC(1.));
+    }
+
+    /// 0.5 BTC collateral, 20k USDC debt, then the supply asset repriced so the
+    /// position lands at `ltv ~= 0.98` (unhealthy but still solvent).
+    fn nearly_underwater_position() -> (Market, BorrowPosition, OracleRate, OracleRate) {
+        let mut market = create_btc_usdc_market();
+        let mut position = BorrowPosition::default();
+        let collateral_oracle = default_btc_oracle_rate();
+        let healthy_supply_oracle =
+            OracleRate::new(IFixedPoint::from_num(1.0), IFixedPoint::from_num(0.0));
+        market.deposit_collateral(&mut position, BTC(0.5)).unwrap();
+        market
+            .borrow(
+                &mut position,
+                USDC(20_000.),
+                &healthy_supply_oracle,
+                &collateral_oracle,
+            )
+            .unwrap();
+        let stressed_supply_oracle =
+            OracleRate::new(IFixedPoint::from_num(2.45), IFixedPoint::from_num(0.0));
+        (market, position, collateral_oracle, stressed_supply_oracle)
+    }
+
+    /// A liquidator capping its repayment one atom below the live debt used to have all
+    /// of the collateral seized while dust debt was left behind, so the post-liquidation
+    /// health check divided by a zero collateral value and the whole liquidation reverted.
+    #[test]
+    fn liquidation_one_atom_below_full_debt_leaves_collateral_for_the_dust_debt() {
+        let (mut market, mut position, collateral_oracle, supply_oracle) =
+            nearly_underwater_position();
+        let health_before = market
+            .borrow_position_health(&position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+
+        let result = market
+            .liquidate(
+                &mut position,
+                &collateral_oracle,
+                &supply_oracle,
+                health_before.borrowed_atoms - 1,
+            )
+            .unwrap();
+
+        assert!(position.collateral_deposited_atoms() > 0);
+        assert!(result.health_after_liquidation.ltv < health_before.ltv);
+    }
+
+    /// Above `ltv > 1 / (1 + liquidation_bonus)` every partial liquidation used to revert:
+    /// scaling a bonus-inclusive seizure down linearly removes proportionally more
+    /// collateral value than debt value, so the resulting ltv went *up*.
+    #[test]
+    fn partial_liquidation_is_possible_above_inverse_bonus_ltv() {
+        let (market, position, collateral_oracle, supply_oracle) = nearly_underwater_position();
+        let health = market
+            .borrow_position_health(&position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+        let bonus = market.config().ltv_config().liquidation_bonus.to_float();
+        assert!(health.ltv.to_float() > 1.0 / (1.0 + bonus));
+
+        for pct in [10u64, 25, 50, 75, 90, 95, 99] {
+            let (mut market, mut position, collateral_oracle, supply_oracle) =
+                nearly_underwater_position();
+            let cap = health.borrowed_atoms / 100 * pct;
+            let result = market
+                .liquidate(&mut position, &collateral_oracle, &supply_oracle, cap)
+                .unwrap_or_else(|e| panic!("{pct}% repay cap rejected: {e:?}"));
+            assert!(
+                result.liquidation_result_with_bonus.borrowed_atoms_to_repay <= cap,
+                "{pct}% repay cap exceeded"
+            );
+            assert!(
+                result.health_after_liquidation.ltv <= health.ltv,
+                "{pct}% repay cap raised the ltv"
+            );
+        }
+    }
+
+    /// The capital-sweep settlement path shares the liquidation math, so a curator
+    /// holding swept collateral must be able to settle partially too.
+    #[test]
+    fn capital_sweep_can_be_partially_settled_above_inverse_bonus_ltv() {
+        let (mut market, mut position, collateral_oracle, supply_oracle) =
+            nearly_underwater_position();
+        let health_before = market
+            .begin_capital_sweep(&mut position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+
+        let settlement = market
+            .settle_capital_sweep(
+                &mut position,
+                &collateral_oracle,
+                &supply_oracle,
+                health_before.borrowed_atoms / 2,
+                u64::MAX,
+            )
+            .unwrap();
+
+        assert!(
+            settlement
+                .liquidation_result_with_bonus
+                .borrowed_atoms_to_repay
+                > 0
+        );
+        assert!(settlement.health_after_settlement.ltv <= health_before.ltv);
+    }
+
+    /// While a capital sweep is open the position's whole collateral sits in the swept
+    /// balance, so `borrow_position_health` sees debt against a zero collateral value.
+    /// Dividing there surfaced as an opaque `DivisionOverflow`; the ltv saturates instead,
+    /// which reads correctly as "infinitely unhealthy" everywhere it is compared.
+    #[test]
+    fn health_with_no_deposited_collateral_saturates_the_ltv() {
+        let (mut market, mut position, collateral_oracle, supply_oracle) =
+            nearly_underwater_position();
+        market
+            .begin_capital_sweep(&mut position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+        assert_eq!(position.collateral_deposited_atoms(), 0);
+
+        let health = market
+            .borrow_position_health(&position, &collateral_oracle, &supply_oracle)
+            .unwrap();
+
+        assert!(health.borrowed_atoms > 0);
+        assert!(health.collateral_value.is_zero());
+        assert_eq!(health.ltv, IFixedPoint::MAX);
     }
 
     mod prop_tests {

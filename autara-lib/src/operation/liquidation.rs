@@ -1,5 +1,5 @@
 use crate::{
-    error::LendingResult,
+    error::{LendingError, LendingResult},
     math::{ifixed_point::IFixedPoint, safe_math::SafeMath},
     oracle::oracle_price::OracleRate,
 };
@@ -76,6 +76,25 @@ pub fn compute_liquidation_with_fee(
         adjusted_new_ltv,
     )?;
     liquidation_result.adjust_for_max_repay(max_borrowed_atoms_to_repay.min(borrowed_atoms));
+    // The ltv only stays flat or decreases if the seized share of the collateral is at
+    // most the repaid share of the debt. The bonus is part of the seizure, so scaling a
+    // full liquidation plan down linearly takes `1 + liquidation_fee` times the repaid
+    // share and pushes the ltv *up* as soon as `ltv > 1 / (1 + liquidation_fee)`. Solve
+    // for the seizure the repay cap actually affords instead: keep the whole bonus while
+    // it fits, and trim it once it no longer does.
+    let max_total_collateral_atoms = if liquidation_result.borrowed_atoms_to_repay >= borrowed_atoms
+    {
+        collateral_atoms
+    } else {
+        // Raw u128 rather than `SafeMath`: nothing here can fail. A `u64 * u64` product
+        // always fits in u128, `borrowed_atoms` is non-zero because the branch above
+        // catches `borrowed_atoms_to_repay >= borrowed_atoms` (which a zero
+        // `borrowed_atoms` always satisfies), and the quotient cannot exceed
+        // `collateral_atoms` because `borrowed_atoms_to_repay < borrowed_atoms` here, so
+        // the cast back to u64 is lossless.
+        ((collateral_atoms as u128 * liquidation_result.borrowed_atoms_to_repay as u128)
+            / borrowed_atoms as u128) as u64
+    };
     let mut collateral_atoms_fee = liquidation_result
         .collateral_atoms_to_liquidate
         .safe_mul(liquidation_fee)?
@@ -83,9 +102,14 @@ pub fn compute_liquidation_with_fee(
     let total_collateral_atoms_to_liquidate = liquidation_result
         .collateral_atoms_to_liquidate
         .safe_add(collateral_atoms_fee)?;
-    if total_collateral_atoms_to_liquidate > collateral_atoms {
-        collateral_atoms_fee =
-            collateral_atoms.safe_sub(liquidation_result.collateral_atoms_to_liquidate)?;
+    if total_collateral_atoms_to_liquidate > max_total_collateral_atoms {
+        // Only reachable for `ltv >= 1`, where the repaid debt is worth more than the
+        // collateral backing it, so not even a bonus-free seizure brings the ltv down.
+        if liquidation_result.collateral_atoms_to_liquidate > max_total_collateral_atoms {
+            return Err(LendingError::LiquidationCannotReduceLtv.into());
+        }
+        collateral_atoms_fee = max_total_collateral_atoms
+            .safe_sub(liquidation_result.collateral_atoms_to_liquidate)?;
     }
     let result = LiquidationResultWithBonus {
         borrowed_atoms_to_repay: liquidation_result.borrowed_atoms_to_repay,
@@ -408,6 +432,31 @@ pub mod tests {
         assert!(result.borrowed_atoms_to_repay <= max_repay);
     }
 
+    /// At `ltv >= 1` the repaid debt is worth more than the collateral behind it, so no
+    /// seizure the repay cap affords reduces the ltv, not even a bonus-free one. That is
+    /// reported as `LiquidationCannotReduceLtv` rather than as an opaque arithmetic error
+    /// from subtracting a larger seizure from a smaller cap.
+    #[test]
+    pub fn partial_liquidation_of_insolvent_position_is_rejected() {
+        let setup = LiquidationSetup::new();
+        // 1 BTC at 100k backing 120k of debt: ltv = 1.2.
+        let borrowed_atoms = USDC(120_000.);
+        let collateral_atoms = BTC(1.);
+        let error = compute_liquidation_with_fee(
+            borrowed_atoms,
+            setup.borrow_decimals,
+            &setup.supply_oracle,
+            collateral_atoms,
+            setup.collateral_decimals,
+            &setup.collateral_oracle,
+            setup.desired_ltv,
+            IFixedPoint::lit("0.1"),
+            USDC(10_000.),
+        )
+        .unwrap_err();
+        assert_eq!(error, LendingError::LiquidationCannotReduceLtv);
+    }
+
     #[test]
     pub fn bonus_proportional_to_collateral() {
         let setup = LiquidationSetup::new();
@@ -579,6 +628,51 @@ pub mod tests {
                     setup.desired_ltv, fee, u64::MAX,
                 ).unwrap();
                 prop_assert!(result.borrowed_atoms_to_repay <= borrowed_atoms);
+            }
+
+            /// The invariant the seizure cap exists to keep: a liquidation holds the ltv
+            /// flat or lower only when the seized share of the collateral is at most the
+            /// repaid share of the debt. With `B` the debt and `C` the collateral, that is
+            /// `seized / C <= repay / B`, asserted here in exact integer form so no
+            /// fixed-point rounding can mask a violation.
+            ///
+            /// Regression: folding the bonus into the seizure and then scaling the plan
+            /// down linearly seized `1 + fee` times the repaid share, breaking this for
+            /// every `ltv > 1 / (1 + fee)`. The borrowed range spans ltv 0.6 to 0.99, so it
+            /// crosses that threshold for the larger fees in range.
+            #[test]
+            fn seized_share_never_exceeds_repaid_share(
+                borrowed_usdc in 60_000u64..99_000u64,
+                max_repay_pct in 1u64..=100u64,
+                fee_thousandths in 1u64..=100u64,
+            ) {
+                let setup = liquidation_setup();
+                let borrowed_atoms = USDC(borrowed_usdc as f64);
+                let collateral_atoms = BTC(1.);
+                let fee = IFixedPoint::from_ratio(fee_thousandths, 1000).unwrap();
+                let max_repay = borrowed_atoms / 100 * max_repay_pct;
+                match compute_liquidation_with_fee(
+                    borrowed_atoms, setup.borrow_decimals, &setup.supply_oracle,
+                    collateral_atoms, setup.collateral_decimals, &setup.collateral_oracle,
+                    setup.desired_ltv, fee, max_repay,
+                ) {
+                    Ok(result) => {
+                        let seized = result.total_collateral_atoms_to_liquidate().unwrap();
+                        prop_assert!(
+                            seized as u128 * borrowed_atoms as u128
+                                <= result.borrowed_atoms_to_repay as u128
+                                    * collateral_atoms as u128,
+                            "seized {}/{} exceeds repaid {}/{}",
+                            seized,
+                            collateral_atoms,
+                            result.borrowed_atoms_to_repay,
+                            borrowed_atoms,
+                        );
+                    }
+                    // The only refusal this path may produce. Every ltv generated here is
+                    // below 1, so reaching it would itself be the bug.
+                    Err(e) => prop_assert_eq!(e, LendingError::LiquidationCannotReduceLtv),
+                }
             }
         }
     }
