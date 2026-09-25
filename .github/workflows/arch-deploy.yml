@@ -1,0 +1,81 @@
+# arch-deploy contract adapter.
+#
+# Uniform deploy entry point, dispatched centrally from arch-infrastructure
+# (docs/program-deploy-contract.md there). Contract: workflow_dispatch with
+# `stage` + `dry_run` (+ optional `mainnet_confirm`); unsupported stages fail
+# fast; dry runs never send transactions.
+#
+# Bridges to the existing _autara-action.yml engine, exactly like the
+# autara-deploy/autara-upgrade wrappers. internal-a / internal-b are not wired
+# yet: the engine's config loading (ci-load-env.sh env files) only knows
+# testnet/mainnet. Wiring them means adding per-stage env files + GitHub
+# Environments holding ARCH_RPC_URL and the stage keypairs, then extending the
+# guard below.
+
+name: arch-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Target Arch stage
+        type: choice
+        required: true
+        options:
+          - internal-a
+          - internal-b
+          - testnet
+          - mainnet
+      dry_run:
+        description: Print addresses + preflight, send NO transactions.
+        type: boolean
+        default: true
+      mainnet_confirm:
+        description: "Type EXACTLY 'DEPLOY MAINNET' to authorize a REAL (dry_run=false) mainnet run."
+        type: string
+        default: ''
+      action:
+        description: 'upgrade = in-place upgrade reusing the existing program + oracle ids (default). deploy = first-time deploy.'
+        type: choice
+        options:
+          - upgrade
+          - deploy
+        default: upgrade
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arch-deploy-${{ inputs.stage }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Stage guard
+    runs-on: ubuntu-latest
+    env:
+      STAGE: ${{ inputs.stage }}
+    steps:
+      - name: Reject unwired stages
+        run: |
+          set -euo pipefail
+          case "${STAGE}" in
+            testnet|mainnet)
+              echo "Stage '${STAGE}' is supported."
+              ;;
+            internal-a|internal-b)
+              echo "::error::Stage '${STAGE}' is not wired for Autara yet: the engine only knows testnet/mainnet env files. See the header of this workflow for what to add." >&2
+              exit 1
+              ;;
+          esac
+
+  run:
+    name: Run engine
+    needs: guard
+    uses: ./.github/workflows/_autara-action.yml
+    secrets: inherit
+    with:
+      action: ${{ inputs.action }}
+      network: ${{ inputs.stage }}
+      dry_run: ${{ inputs.dry_run }}
+      mainnet_confirm: ${{ inputs.mainnet_confirm }}
