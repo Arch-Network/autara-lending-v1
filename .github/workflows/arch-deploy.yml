@@ -60,11 +60,11 @@ jobs:
         run: |
           set -euo pipefail
           case "${STAGE}" in
-            testnet|mainnet)
+            internal-a|internal-b|testnet|mainnet)
               echo "Stage '${STAGE}' is supported."
               ;;
-            internal-a|internal-b)
-              echo "::error::Stage '${STAGE}' is not wired for Autara yet: the engine only knows testnet/mainnet env files. See the header of this workflow for what to add." >&2
+            *)
+              echo "::error::Unknown stage '${STAGE}'." >&2
               exit 1
               ;;
           esac
