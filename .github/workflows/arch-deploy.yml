@@ -5,12 +5,17 @@
 # `stage` + `dry_run` (+ optional `mainnet_confirm`); unsupported stages fail
 # fast; dry runs never send transactions.
 #
-# Bridges to the existing _autara-action.yml engine, exactly like the
-# autara-deploy/autara-upgrade wrappers. internal-a / internal-b are not wired
-# yet: the engine's config loading (ci-load-env.sh env files) only knows
-# testnet/mainnet. Wiring them means adding per-stage env files + GitHub
-# Environments holding ARCH_RPC_URL and the stage keypairs, then extending the
-# guard below.
+# Internal stages (internal-a / internal-b) use a self-contained arch-kit path,
+# in parallel to the existing _autara-action.yml engine, which keeps testnet
+# and mainnet: sync the compiled-in program id to the stage's program key
+# (autara-deploy/scripts/sync-program-id.sh), build both ELFs with
+# build-sbf-checked.sh, then `arch-kit deploy` the program and the oracle.
+# IDL publishing stays with the engine's publish_idl tool for now.
+#
+# Each internal stage is a GitHub Environment of the same name holding
+# PROGRAM_KEY, ORACLE_PROGRAM_KEY and AUTHORITY_KEY (arch-kit hex key files).
+# Expected program ids are pinned below so a wrong key can never create a
+# stray program.
 
 name: arch-deploy
 
@@ -27,7 +32,7 @@ on:
           - testnet
           - mainnet
       dry_run:
-        description: Print addresses + preflight, send NO transactions.
+        description: Print addresses + preflight (internal stages also build); send NO transactions.
         type: boolean
         default: true
       mainnet_confirm:
@@ -35,7 +40,7 @@ on:
         type: string
         default: ''
       action:
-        description: 'upgrade = in-place upgrade reusing the existing program + oracle ids (default). deploy = first-time deploy.'
+        description: 'testnet/mainnet only: upgrade (default) or first-time deploy through the engine.'
         type: choice
         options:
           - upgrade
@@ -56,22 +61,19 @@ jobs:
     env:
       STAGE: ${{ inputs.stage }}
     steps:
-      - name: Reject unwired stages
+      - name: Validate stage
         run: |
           set -euo pipefail
           case "${STAGE}" in
-            internal-a|internal-b|testnet|mainnet)
-              echo "Stage '${STAGE}' is supported."
-              ;;
-            *)
-              echo "::error::Unknown stage '${STAGE}'." >&2
-              exit 1
-              ;;
+            internal-a|internal-b|testnet|mainnet) echo "Stage '${STAGE}' is supported." ;;
+            *) echo "::error::Unknown stage '${STAGE}'." >&2; exit 1 ;;
           esac
 
-  run:
+  # testnet / mainnet: unchanged engine path.
+  run-engine:
     name: Run engine
     needs: guard
+    if: ${{ inputs.stage == 'testnet' || inputs.stage == 'mainnet' }}
     uses: ./.github/workflows/_autara-action.yml
     secrets: inherit
     with:
@@ -79,3 +81,121 @@ jobs:
       network: ${{ inputs.stage }}
       dry_run: ${{ inputs.dry_run }}
       mainnet_confirm: ${{ inputs.mainnet_confirm }}
+
+  # internal-a / internal-b: arch-kit path.
+  deploy-internal:
+    name: arch-kit ${{ inputs.stage }}${{ inputs.dry_run && ' (dry run)' || '' }}
+    needs: guard
+    if: ${{ inputs.stage == 'internal-a' || inputs.stage == 'internal-b' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.stage }}
+    env:
+      STAGE: ${{ inputs.stage }}
+      SOLANA_VERSION: ${{ vars.SOLANA_VERSION || '2.2.14' }}
+      ARCH_KIT_VERSION: 0.1.5
+      RPC_URL: ${{ fromJSON('{"internal-a":"https://rpc.internal-a.arch.network","internal-b":"https://rpc.internal-b.arch.network"}')[inputs.stage] }}
+      EXPECT_PROGRAM_ID: ${{ fromJSON('{"internal-a":"B7XGStrt9TXbgmquDDXbkwWMMtjz3sAmK7PuVief3kNC","internal-b":"FBJyB2RYkn3YVXcsNnH1c48DptetaCTgqrqSvzCnw1er"}')[inputs.stage] }}
+      EXPECT_ORACLE_ID: ${{ fromJSON('{"internal-a":"8VFWXWZncdJdpmRmg6XjGLGyfttfUMYTDZAxXwgKMbtP","internal-b":"DWAqBqwyjmukx8rtRLJYSBmkC2Fk7ov9o8XrDwRSqC7e"}')[inputs.stage] }}
+    steps:
+      - name: Check Environment secrets
+        env:
+          PROGRAM_KEY: ${{ secrets.PROGRAM_KEY }}
+          ORACLE_PROGRAM_KEY: ${{ secrets.ORACLE_PROGRAM_KEY }}
+          AUTHORITY_KEY: ${{ secrets.AUTHORITY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PROGRAM_KEY}" ] || [ -z "${ORACLE_PROGRAM_KEY}" ] || [ -z "${AUTHORITY_KEY}" ]; then
+            echo "::error::Stage '${STAGE}' is not wired: add PROGRAM_KEY, ORACLE_PROGRAM_KEY and AUTHORITY_KEY secrets to the '${STAGE}' Environment." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.85.1
+        uses: dtolnay/rust-toolchain@1.85.1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Solana toolchain (cargo-build-sbf) and arch-kit
+        run: |
+          set -euo pipefail
+          installer="$(curl -sSfL "https://release.anza.xyz/v${SOLANA_VERSION}/install")"
+          sh -c "$installer"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+          cargo install arch-kit --version "${ARCH_KIT_VERSION}" --locked
+
+      # The on-chain program derives PDAs from a compiled-in id, so the source
+      # must carry this stage's program id before the ELF is built.
+      - name: Verify keys and sync the program id into the source
+        env:
+          PROGRAM_KEY_VALUE: ${{ secrets.PROGRAM_KEY }}
+          ORACLE_KEY_VALUE: ${{ secrets.ORACLE_PROGRAM_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key_dir="$(mktemp -d "${RUNNER_TEMP}/autara-keys.XXXXXX")"
+          trap 'rm -rf -- "${key_dir}"' EXIT
+          printf '%s\n' "${PROGRAM_KEY_VALUE}" > "${key_dir}/program.key"
+          printf '%s\n' "${ORACLE_KEY_VALUE}" > "${key_dir}/oracle.key"
+          unset PROGRAM_KEY_VALUE ORACLE_KEY_VALUE
+          program_id="$(arch-kit pubkey "${key_dir}/program.key")"
+          oracle_id="$(arch-kit pubkey "${key_dir}/oracle.key")"
+          [ "${program_id}" = "${EXPECT_PROGRAM_ID}" ] || { echo "::error::PROGRAM_KEY derives ${program_id}, expected ${EXPECT_PROGRAM_ID} for '${STAGE}'." >&2; exit 1; }
+          [ "${oracle_id}" = "${EXPECT_ORACLE_ID}" ] || { echo "::error::ORACLE_PROGRAM_KEY derives ${oracle_id}, expected ${EXPECT_ORACLE_ID} for '${STAGE}'." >&2; exit 1; }
+          # sync-program-id.sh wants the 64-char hex form of the base58 id.
+          program_hex="$(python3 - "${program_id}" <<'PY'
+          import sys
+          A = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+          n = 0
+          for c in sys.argv[1]:
+              n = n * 58 + A.index(c)
+          raw = n.to_bytes(32, "big")
+          print(raw.hex())
+          PY
+          )"
+          bash autara-deploy/scripts/sync-program-id.sh "${program_hex}"
+
+      - name: Build program and oracle ELFs
+        run: |
+          set -euo pipefail
+          ./autara-deploy/scripts/build-sbf-checked.sh programs/autara-program
+          ./autara-deploy/scripts/build-sbf-checked.sh programs/autara-oracle
+          test -s target/deploy/autara_program.so
+          test -s target/deploy/autara_oracle.so
+          arch-kit --rpc-url "${RPC_URL}" --bitcoin-network testnet health
+
+      - name: Upload built ELFs
+        uses: actions/upload-artifact@v4
+        with:
+          name: autara-arch-kit-${{ inputs.stage }}-${{ github.sha }}
+          path: |
+            target/deploy/autara_program.so
+            target/deploy/autara_oracle.so
+
+      - name: Deploy program and oracle via arch-kit
+        if: ${{ !inputs.dry_run }}
+        env:
+          PROGRAM_KEY_VALUE: ${{ secrets.PROGRAM_KEY }}
+          ORACLE_KEY_VALUE: ${{ secrets.ORACLE_PROGRAM_KEY }}
+          AUTHORITY_KEY_VALUE: ${{ secrets.AUTHORITY_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key_dir="$(mktemp -d "${RUNNER_TEMP}/autara-deploy-keys.XXXXXX")"
+          trap 'rm -rf -- "${key_dir}"' EXIT
+          printf '%s\n' "${PROGRAM_KEY_VALUE}" > "${key_dir}/program.key"
+          printf '%s\n' "${ORACLE_KEY_VALUE}" > "${key_dir}/oracle.key"
+          printf '%s\n' "${AUTHORITY_KEY_VALUE}" > "${key_dir}/authority.key"
+          unset PROGRAM_KEY_VALUE ORACLE_KEY_VALUE AUTHORITY_KEY_VALUE
+          arch-kit --rpc-url "${RPC_URL}" --bitcoin-network testnet deploy \
+            --fund-authority \
+            --elf target/deploy/autara_program.so \
+            --program-key "${key_dir}/program.key" \
+            --authority "${key_dir}/authority.key" \
+            --expect-program-id "${EXPECT_PROGRAM_ID}"
+          arch-kit --rpc-url "${RPC_URL}" --bitcoin-network testnet deploy \
+            --elf target/deploy/autara_oracle.so \
+            --program-key "${key_dir}/oracle.key" \
+            --authority "${key_dir}/authority.key" \
+            --expect-program-id "${EXPECT_ORACLE_ID}"

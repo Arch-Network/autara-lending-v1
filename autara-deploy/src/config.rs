@@ -67,9 +67,7 @@ impl FromStr for Network {
     fn from_str(s: &str) -> Result<Self> {
         match s.trim().to_lowercase().as_str() {
             "localnet" | "local" | "regtest" | "dev" => Ok(Network::Localnet),
-            // internal-a / internal-b are Arch's internal stages: testnet-mode
-            // chains behind their own RPC (see autara.internal-*.env).
-            "testnet" | "devnet" | "internal-a" | "internal-b" => Ok(Network::Testnet),
+            "testnet" | "devnet" => Ok(Network::Testnet),
             "mainnet" | "mainnet-beta" => Ok(Network::Mainnet),
             other => bail!("unknown NETWORK '{other}' (expected localnet|testnet|mainnet)"),
         }
