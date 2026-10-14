@@ -147,6 +147,8 @@ pub enum LendingError {
     LiquidatorAlreadyWhitelisted,
     #[error("Liquidator is not whitelisted")]
     LiquidatorNotWhitelisted,
+    #[error("Oracle account address does not match the feed's canonical account")]
+    InvalidOracleFeedAccount,
 }
 
 impl LendingError {
@@ -222,10 +224,7 @@ mod tests {
                 LendingError::PositionIsHealthy,
                 "Position is healthy and cannot be liquidated",
             ),
-            (
-                LendingError::OracleRateTooOld,
-                "Oracle price is too old",
-            ),
+            (LendingError::OracleRateTooOld, "Oracle price is too old"),
             (
                 LendingError::CapitalSweepPending,
                 "A capital sweep is already pending for this market",

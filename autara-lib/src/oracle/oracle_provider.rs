@@ -121,6 +121,21 @@ impl<'a> OracleLoader for OracleProviderRef<'a> {
         &self,
         view: AccountView<D>,
     ) -> LendingResult<UncheckedOracleRate> {
+        // The feed's canonical address is derived from its feed_id, so the
+        // account handed to us must live at that exact address. Without this
+        // check, the underlying providers only validate the account's owner
+        // and its self-reported `feed_id`/`price_id` field, both of which
+        // live in account *data* the account's own authority controls (the
+        // oracle program lets any signer create a feed under a feed_id of
+        // their choosing). That would let anyone substitute their own
+        // self-authorized account, with a forged id, for a market's real
+        // price feed.
+        if let Some(expected_key) = self.oracle_feed_pubkey() {
+            if view.key != &expected_key {
+                return Err(LendingError::InvalidOracleFeedAccount.into())
+                    .with_msg("oracle account is not the feed's canonical account");
+            }
+        }
         match self {
             OracleProviderRef::Pyth(pyth_provider) => pyth_provider.load_oracle_price(view),
             OracleProviderRef::Chaos(chaos_provider) => chaos_provider.load_oracle_price(view),
@@ -195,6 +210,66 @@ mod tests {
     use crate::{
         error::LendingError, math::ifixed_point::IFixedPoint, oracle::oracle_price::OracleRate,
     };
+
+    /// The oracle program lets anyone create a fresh feed account under a
+    /// feed_id of their own choosing and become its authority (see
+    /// `programs/autara-oracle`). Nothing stops that authority from later
+    /// writing an arbitrary `id` into their own account's data. If the
+    /// consumer only checks the account's *data* (owner + embedded feed id)
+    /// and never checks that the account's *address* is the canonical PDA
+    /// for the configured feed, an attacker can submit their own
+    /// self-controlled account, with a forged `id` matching a real market's
+    /// feed, as if it were that market's genuine price feed.
+    #[test]
+    fn load_oracle_price_rejects_account_at_wrong_address() {
+        use crate::oracle::pyth::{Metadata, PriceData, PythPrice, PythPriceAccount};
+        use arch_program::pubkey::Pubkey;
+
+        let victim_feed_id = [7u8; 32];
+        let program_id = Pubkey::new_unique();
+        let provider = crate::oracle::pyth::PythProvider {
+            feed_id: victim_feed_id,
+            program_id,
+        };
+
+        // Attacker-controlled account: owned by the right program, and its
+        // embedded `id` is forged to match the victim's feed_id, but it does
+        // NOT live at the canonical PDA for that feed_id (it lives wherever
+        // the attacker created their own feed account).
+        let forged_account = PythPriceAccount {
+            pyth_price: PythPrice {
+                id: victim_feed_id,
+                price: PriceData {
+                    price: 1,
+                    conf: 0,
+                    expo: 0,
+                    publish_time: 1_000,
+                },
+                ema_price: PriceData {
+                    price: 1,
+                    conf: 0,
+                    expo: 0,
+                    publish_time: 1_000,
+                },
+                metadata: Metadata {
+                    slot: 0,
+                    proof_available_time: 1_000,
+                    prev_publish_time: 999,
+                },
+            },
+            authority: Pubkey::new_unique(),
+        };
+        let bytes = bytemuck::bytes_of(&forged_account).to_vec();
+        let attacker_owned_key = Pubkey::new_unique();
+        assert_ne!(
+            attacker_owned_key,
+            Pubkey::find_program_address(&[&victim_feed_id], &program_id).0
+        );
+
+        let view: AccountView<Vec<u8>> = (&attacker_owned_key, bytes, &program_id).into();
+        let result = OracleProviderRef::Pyth(&provider).load_oracle_price(view);
+        assert_eq!(*result.unwrap_err(), LendingError::InvalidOracleFeedAccount);
+    }
 
     #[test]
     fn test_validate_valid_rate() {
