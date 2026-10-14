@@ -88,6 +88,12 @@ fn ensure_feed_account<'a>(
 /// Writes `pyth_data` into the oracle account, enforcing the authority
 /// binding: the signer that creates a feed becomes its authority, and every
 /// later update must be signed by that same authority.
+///
+/// The feed id is also pinned at creation: consumers (`PythProvider::load_oracle_price`)
+/// trust an oracle account's embedded `id` field instead of validating the
+/// account's address against the feed's canonical PDA, so allowing the id to
+/// change on an existing account would let it be substituted for any other
+/// market's price feed.
 pub fn apply_price_update(
     oracle_data: &mut PythPriceAccount,
     signer: &Pubkey,
@@ -99,6 +105,8 @@ pub fn apply_price_update(
         oracle_data.authority = *signer;
     } else if oracle_data.authority != *signer {
         return Err(ProgramError::IncorrectAuthority);
+    } else if oracle_data.pyth_price.id != pyth_data.id {
+        return Err(ProgramError::InvalidArgument);
     }
     oracle_data.pyth_price = *pyth_data;
     oracle_data.pyth_price.price.publish_time = unix_timestamp;
@@ -178,5 +186,24 @@ mod tests {
         let err = apply_price_update(&mut account, &INTRUDER, &price([7u8; 32], 1), false, 4000)
             .unwrap_err();
         assert_eq!(err, ProgramError::IncorrectAuthority);
+    }
+
+    /// The account's own authority must not be able to repurpose an existing
+    /// feed account for a different `feed_id` on a non-creating update: the
+    /// lending program trusts an oracle account's embedded `id` field instead
+    /// of its address, so silently allowing the id to change would let this
+    /// account (still owned by the oracle program, and still fresh) be passed
+    /// in place of any other market's legitimate price feed.
+    #[test]
+    fn authorized_push_cannot_change_feed_id() {
+        let mut account = PythPriceAccount::zeroed();
+        apply_price_update(&mut account, &CREATOR, &price([7u8; 32], 100), true, 1000).unwrap();
+        let err = apply_price_update(&mut account, &CREATOR, &price([9u8; 32], 999), false, 2000)
+            .unwrap_err();
+        assert_eq!(err, ProgramError::InvalidArgument);
+        // the rejected update must not have touched the stored feed id or price
+        assert_eq!(account.pyth_price.id, [7u8; 32]);
+        assert_eq!(account.pyth_price.price.price, 100);
+        assert_eq!(account.pyth_price.price.publish_time, 1000);
     }
 }
