@@ -82,7 +82,14 @@ async fn main() -> Result<()> {
                 let router = router.clone();
                 async move {
                     for [token_a, token_b] in tokens.iter().array_combinations::<2>() {
-                        let err = router.register_pair(*token_a, *token_b).await;
+                        if let Err(e) = router.register_pair(*token_a, *token_b).await {
+                            tracing::warn!(
+                                ?token_a,
+                                ?token_b,
+                                "Failed to register token pair with router: {:#}",
+                                e
+                            );
+                        }
                     }
                 }
             });
