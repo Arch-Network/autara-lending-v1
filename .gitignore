@@ -27,3 +27,5 @@ proptest-regressions/
 
 # Rollback ELFs dumped by backup_program_elf — large binaries, never committed.
 /backups/
+__pycache__/
+*.pyc

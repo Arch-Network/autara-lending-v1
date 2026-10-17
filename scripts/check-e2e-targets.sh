@@ -57,7 +57,17 @@ for name, hexid, want_exec in TARGETS:
         problems.append(f"{name}: RPC call failed: {exc}")
         continue
     if "error" in res:
-        missing.append(f"{name}={hexid} ({res['error'].get('message')})")
+        err = res["error"]
+        code = err.get("code")
+        message = err.get("message")
+        # arch_sdk (pinned =0.6.2, see client/mod.rs::NOT_FOUND_CODE) only
+        # treats code 404 as "account not found". Any other code is a hard
+        # RPC failure (ArchError::RpcRequestFailed) and must not be
+        # misreported as a wiped/missing deployment.
+        if code == 404:
+            missing.append(f"{name}={hexid} ({message})")
+        else:
+            problems.append(f"{name}={hexid}: RPC error {code}: {message}")
         continue
     acct = res["result"]
     owner = acct.get("owner")
@@ -67,8 +77,6 @@ for name, hexid, want_exec in TARGETS:
         problems.append(f"{name}={hexid} exists but is not executable")
     print(f"  ok  {name} = {hexid}")
 
-# A market from a different deployment resolves fine on its own but fails
-# confusingly once the flow starts issuing instructions against it.
 market_owner = owners.get("E2E_MARKET")
 program = os.environ["E2E_PROGRAM_ID"]
 if market_owner and market_owner != program:
