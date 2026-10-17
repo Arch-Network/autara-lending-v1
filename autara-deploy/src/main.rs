@@ -626,10 +626,19 @@ fn main() -> Result<()> {
         artifact.oracle_elf_sha256 = sha256_file(&cfg.oracle_elf_path).ok();
     }
 
-    // Create the global config.
+    // Create the global config. The on-chain program now requires this
+    // instruction to be signed by the program's current upgrade authority
+    // (`deployer_kp`, not the separate `admin_kp`) — the global config PDA has
+    // no seed input, so its address is publicly derivable before it exists,
+    // and gating creation on the upgrade authority is what stops anyone else
+    // from front-running this step and permanently taking over `admin` /
+    // `fee_receiver` for the whole protocol. `admin`/`fee_receiver` are still
+    // whatever this config says — only who is allowed to make the call has
+    // changed.
     if step_init_config {
+        let deployer_ctx = RpcContext::new(cfg.arch_config()?, deployer_kp, deployer_pubkey);
         let pda = rt.block_on(steps::create_global_config(
-            &ctx,
+            &deployer_ctx,
             program_pubkey,
             admin,
             fee_receiver,

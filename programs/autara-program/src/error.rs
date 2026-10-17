@@ -97,6 +97,8 @@ pub enum LendingAccountValidationError {
     MissingLiquidatorWhitelistEntry,
     #[error("Liquidator is not whitelisted")]
     LiquidatorNotWhitelisted,
+    #[error("Global config can only be created by the program's upgrade authority")]
+    NotProgramUpgradeAuthority,
 }
 
 pub const ACCOUNT_VALIDATION_ERROR_OFFSET: u32 = 6000;
@@ -279,6 +281,10 @@ pub mod tests {
         assert_eq!(
             u8::from(LendingAccountValidationError::LiquidatorNotWhitelisted),
             8
+        );
+        assert_eq!(
+            u8::from(LendingAccountValidationError::NotProgramUpgradeAuthority),
+            9
         );
     }
 }
