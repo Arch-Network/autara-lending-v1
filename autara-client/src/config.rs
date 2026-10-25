@@ -38,21 +38,32 @@ impl ArchConfig {
     }
 
     pub fn testnet() -> Self {
+        // Credentials are no longer hardcoded in source. They must be provided
+        // via environment variables (BITCOIN_NODE_USERNAME / BITCOIN_NODE_PASSWORD)
+        // so no real secret is committed to the repository (removed by audit cleanup).
         Self {
             bitcoin_node_endpoint:
                 "https://bitcoin-node.test.aws.archnetwork.xyz:49332/wallet/testwallet".to_string(),
             arch_node_url: "https://rpc.testnet.arch.network".into(),
-            bitcoin_node_password: "bitcoin".to_string(),
-            bitcoin_node_username: "uU1taFBTUvae96UCtA8YxAepYTFszYvYVSXK8xgzBs0".to_string(),
+            bitcoin_node_password: std::env::var("BITCOIN_NODE_PASSWORD")
+                .expect("BITCOIN_NODE_PASSWORD must be set for the testnet profile"),
+            bitcoin_node_username: std::env::var("BITCOIN_NODE_USERNAME")
+                .expect("BITCOIN_NODE_USERNAME must be set for the testnet profile"),
         }
     }
 
     pub fn arigato() -> Self {
+        // Local private testnet profile: credentials are read from environment
+        // variables instead of being hardcoded (removed by audit cleanup).
         Self {
-            bitcoin_node_endpoint: "http://100.101.31.18:18332".to_string(),
-            arch_node_url: "http://100.101.31.18:9002".to_string(),
-            bitcoin_node_password: "arigatobitcoin".to_string(),
-            bitcoin_node_username: "arigatonode0bitcoin".to_string(),
+            bitcoin_node_endpoint: std::env::var("BITCOIN_NODE_ENDPOINT")
+                .unwrap_or_else(|_| "http://100.101.31.18:18332".to_string()),
+            arch_node_url: std::env::var("ARCH_NODE_URL")
+                .unwrap_or_else(|_| "http://100.101.31.18:9002".to_string()),
+            bitcoin_node_password: std::env::var("BITCOIN_NODE_PASSWORD")
+                .expect("BITCOIN_NODE_PASSWORD must be set for the arigato profile"),
+            bitcoin_node_username: std::env::var("BITCOIN_NODE_USERNAME")
+                .expect("BITCOIN_NODE_USERNAME must be set for the arigato profile"),
         }
     }
 
