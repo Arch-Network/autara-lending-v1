@@ -37,6 +37,10 @@ pub struct UncheckedOracleRate {
     publish_time: i64,
 }
 
+/// Clock-skew tolerance for `publish_time` ahead of the on-chain clock.
+/// Larger values would let a stale feed look fresh via `.max(0)` age.
+const MAX_ORACLE_PUBLISH_TIME_SKEW_SECS: i64 = 30;
+
 impl UncheckedOracleRate {
     pub fn new(rate: OracleRate, publish_time: i64) -> Self {
         Self { rate, publish_time }
@@ -59,6 +63,14 @@ impl UncheckedOracleRate {
         }
         if self.rate.rate().is_zero() {
             return Err(LendingError::OracleRateIsNull.into());
+        }
+        if self
+            .publish_time
+            .checked_sub(unix_timestamp)
+            .is_some_and(|ahead| ahead > MAX_ORACLE_PUBLISH_TIME_SKEW_SECS)
+        {
+            return Err(LendingError::OracleRateTooOld.into())
+                .with_msg("publish_time is in the future");
         }
         let age = unix_timestamp
             .checked_sub(self.publish_time)
@@ -289,6 +301,27 @@ mod tests {
         let result = oracle_rate.validate(&config, 120);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), LendingError::OracleRateTooOld);
+    }
+
+    #[test]
+    fn test_validate_rejects_future_publish_time() {
+        let rate = OracleRate::new(IFixedPoint::lit("1.5"), IFixedPoint::lit("0.01"));
+        let config = OracleValidationConfig::new(60, 0.05.into());
+        let now = 1_000i64;
+        let far_ahead = UncheckedOracleRate::new(rate, now + MAX_ORACLE_PUBLISH_TIME_SKEW_SECS + 1);
+        assert_eq!(
+            far_ahead.validate(&config, now).unwrap_err(),
+            LendingError::OracleRateTooOld
+        );
+    }
+
+    #[test]
+    fn test_validate_allows_publish_time_within_skew() {
+        let rate = OracleRate::new(IFixedPoint::lit("1.5"), IFixedPoint::lit("0.01"));
+        let config = OracleValidationConfig::new(60, 0.05.into());
+        let now = 1_000i64;
+        let within_skew = UncheckedOracleRate::new(rate, now + MAX_ORACLE_PUBLISH_TIME_SKEW_SECS);
+        assert_eq!(within_skew.validate(&config, now).unwrap(), rate);
     }
 
     #[test]
